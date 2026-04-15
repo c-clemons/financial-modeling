@@ -118,7 +118,7 @@ def show():
         "Cash Collected": cf['cash_in'][:show_months],
         "Total Overhead": cf['cash_overhead'][:show_months],
         "Cash After Overhead": cf['cash_after_overhead'][:show_months],
-        f"Distributable (>{fmt_currency(min_cash)})": cf['distributable'][:show_months],
+        f"Distributable (>{fmt_currency(assumptions.get('minimum_cash_balance', 150000))})": cf['distributable'][:show_months],
         "Physician Services (90%)": cf['physician'][:show_months],
         "Savings Deposit (10%)": cf['savings_deposit'][:show_months],
         "Ending Cash": cf['ending_cash'][:show_months],
