@@ -129,7 +129,7 @@ def show():
     df.index.name = "Line Item"
 
     summary_rows = ["Cash After Overhead", "Ending Cash", "Savings Balance",
-                     f"Distributable (>{fmt_currency(min_cash)})"]
+                     "Distributable"]
 
     def _style(row):
         styles = []
