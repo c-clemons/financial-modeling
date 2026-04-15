@@ -1,0 +1,10 @@
+outputs/
+data/
+*.xlsx
+.DS_Store
+__pycache__/
+*.pyc
+.env
+.streamlit/secrets.toml
+models/cns/dashboard/data/user_overrides.json
+models/cns/dashboard/data/scenarios/
