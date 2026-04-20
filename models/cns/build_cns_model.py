@@ -2269,8 +2269,8 @@ def _get_monthly_total_expenses_25():
 # ============================================================
 # MAIN
 # ============================================================
-def build_location_pl(wb, location_name, pl_data):
-    """Build a per-location P&L tab with hardcoded values from generate_pl_by_location()."""
+def build_location_pl(wb, location_name, pl_data, asm):
+    """Build a per-location P&L tab with FORMULAS referencing Assumptions tab."""
     tab_name = f"{location_name} P&L"
     if len(tab_name) > 31:
         tab_name = tab_name[:31]
@@ -2284,7 +2284,6 @@ def build_location_pl(wb, location_name, pl_data):
         ws.column_dimensions[get_column_letter(ci)].width = 11
     ws.column_dimensions[get_column_letter(3 + N)].width = 14
 
-    # Title
     ws.merge_cells(start_row=2, start_column=2, end_row=2, end_column=min(3 + N, 30))
     ws.cell(row=2, column=2,
             value=f"{location_name} \u2014 Monthly P&L (Cash Basis, 2026-2030)").font = title_font
@@ -2292,63 +2291,148 @@ def build_location_pl(wb, location_name, pl_data):
     r = 4
     last_col = 3 + N
 
-    # Header
     section_bar(ws, r, 2, last_col, f"{location_name.upper()} P&L")
     r += 1
     header_row(ws, r, ["Account"] + FORECAST_MONTH_LABELS + ["Total"], c1=2)
     r += 1
 
-    # Surgery volumes
-    r = _write_row(ws, r, "Bobas Volume", pl_data['bobas_volume'], fmt='#,##0')
-    r = _write_row(ws, r, "GAP Volume", pl_data['gap_volume'], fmt='#,##0')
-    total_vol = [pl_data['bobas_volume'][i] + pl_data['gap_volume'][i] for i in range(N)]
-    r = _write_row(ws, r, "Total Surgeries", total_vol, bold=True, fmt='#,##0')
+    # Get volume column references for this location from Assumptions tab
+    loc_vol = asm.get('vol_by_location', {}).get(location_name)
+    vol_start_row = asm.get('vol_start', 28)  # row where volume data starts
+
+    if loc_vol:
+        bobas_col_letter = get_column_letter(loc_vol['bobas_col'])
+        gap_col_letter = get_column_letter(loc_vol['gap_col'])
+    else:
+        # Fallback to consolidated columns
+        bobas_col_letter = 'C'
+        gap_col_letter = 'D'
+
+    # --- SURGERY VOLUMES (formulas referencing Assumptions) ---
+    row_bobas_vol = r
+    formulas = [f"=Assumptions!${bobas_col_letter}${vol_start_row + i}" for i in range(N)]
+    r = _write_formula_row(ws, r, "Bobas Volume", formulas, fmt='#,##0')
+
+    row_gap_vol = r
+    formulas = [f"=Assumptions!${gap_col_letter}${vol_start_row + i}" for i in range(N)]
+    r = _write_formula_row(ws, r, "GAP Volume", formulas, fmt='#,##0')
+
+    row_total_vol = r
+    formulas = [f"={mcol(i)}{row_bobas_vol}+{mcol(i)}{row_gap_vol}" for i in range(N)]
+    r = _write_formula_row(ws, r, "Total Surgeries", formulas, bold=True, fmt='#,##0')
     r += 1
 
-    # Revenue
+    # --- REVENUE EARNED (accrual, for collection curve) ---
     ws.cell(row=r, column=2, value="REVENUE (Cash Collected)").font = subsection_font
     r += 1
-    r = _write_row(ws, r, "  Bobas Collected", pl_data['bobas_collected'])
-    r = _write_row(ws, r, "  GAP Collected", pl_data['gap_collected'])
-    r = _write_row(ws, r, "TOTAL COLLECTIONS", pl_data['total_collected'], bold=True)
+
+    row_bobas_earned = r
+    formulas = [f"={mcol(i)}{row_bobas_vol}*Assumptions!$C${asm['avg_rev_bobas']}" for i in range(N)]
+    r = _write_formula_row(ws, r, "  Bobas Earned (Accrual)", formulas)
+
+    # Bobas collected (apply collection curve)
+    row_bobas_collected = r
+    bobas_curve_len = asm['curve_bobas_len']
+    coll_formulas = []
+    for j in range(N):
+        terms = []
+        for lag in range(bobas_curve_len):
+            src = j - lag
+            if src >= 0:
+                terms.append(
+                    f"{mcol(src)}{row_bobas_earned}*Assumptions!$C${asm['curve_bobas_start'] + lag}/100"
+                )
+        coll_formulas.append("=" + "+".join(terms) if terms else "=0")
+    r = _write_formula_row(ws, r, "  Bobas Collected", coll_formulas)
+
+    row_gap_earned = r
+    formulas = [f"={mcol(i)}{row_gap_vol}*Assumptions!$C${asm['avg_rev_gap']}" for i in range(N)]
+    r = _write_formula_row(ws, r, "  GAP Earned (Accrual)", formulas)
+
+    # GAP collected (apply collection curve)
+    row_gap_collected = r
+    gap_curve_len = asm['curve_gap_len']
+    coll_formulas = []
+    for j in range(N):
+        terms = []
+        for lag in range(gap_curve_len):
+            src = j - lag
+            if src >= 0:
+                terms.append(
+                    f"{mcol(src)}{row_gap_earned}*Assumptions!$C${asm['curve_gap_start'] + lag}/100"
+                )
+        coll_formulas.append("=" + "+".join(terms) if terms else "=0")
+    r = _write_formula_row(ws, r, "  GAP Collected", coll_formulas)
+
+    row_total_collected = r
+    formulas = [f"={mcol(i)}{row_bobas_collected}+{mcol(i)}{row_gap_collected}" for i in range(N)]
+    r = _write_formula_row(ws, r, "TOTAL COLLECTIONS", formulas, bold=True)
     r += 1
 
-    # Overhead
+    # --- OVERHEAD (mix of formulas and hardcoded) ---
     ws.cell(row=r, column=2, value="DIRECT OVERHEAD").font = subsection_font
     r += 1
-    r = _write_row(ws, r, "  Billing (18%)", pl_data['billing_fees'])
+
+    # Billing = 18% of collections
+    row_billing = r
+    formulas = [f"={mcol(i)}{row_total_collected}*Assumptions!$C${asm['billing_rate']}/100" for i in range(N)]
+    r = _write_formula_row(ws, r, "  Billing (18%)", formulas)
+
+    # Payroll, contractors, opex, expansion — hardcoded from py calculations
+    # (These could be made formula-driven too, but the team roster and opex
+    # structures are complex. Hardcoded values update on rebuild.)
+    row_payroll = r
     r = _write_row(ws, r, "  Payroll (W-2)", pl_data['payroll'])
+    row_contractors = r
     r = _write_row(ws, r, "  Contractors", pl_data['contractors'])
+    row_opex = r
     r = _write_row(ws, r, "  Operating Expenses", pl_data['direct_opex'])
+    row_expansion = r
     r = _write_row(ws, r, "  Expansion Costs", pl_data.get('expansion_costs', [0]*N))
 
+    row_shared = r
     if 'shared_overhead_allocation' in pl_data:
         r = _write_row(ws, r, "  Shared Overhead (allocated)", pl_data['shared_overhead_allocation'])
 
-    r = _write_row(ws, r, "TOTAL OVERHEAD", pl_data['total_overhead'], bold=True)
+    # Total overhead (formula summing all components)
+    row_total_overhead = r
+    oh_refs = [row_billing, row_payroll, row_contractors, row_opex, row_expansion]
+    if 'shared_overhead_allocation' in pl_data:
+        oh_refs.append(row_shared)
+    formulas = [
+        "=" + "+".join(f"{mcol(i)}{rr}" for rr in oh_refs)
+        for i in range(N)
+    ]
+    r = _write_formula_row(ws, r, "TOTAL OVERHEAD", formulas, bold=True)
     r += 1
 
     # Surgeon compensation
     surgeon_pay = pl_data.get('surgeon_compensation', [0]*N)
+    row_surgeon = None
     if any(v != 0 for v in surgeon_pay):
         surgeon_rate = pl_data.get('surgeon_rate', 0)
-        r = _write_row(ws, r, f"  Surgeon Compensation ({surgeon_rate:.0f}%)", surgeon_pay)
+        row_surgeon = r
+        # Formula: collections * surgeon %
+        formulas = [f"={mcol(i)}{row_total_collected}*{surgeon_rate}/100" for i in range(N)]
+        r = _write_formula_row(ws, r, f"  Surgeon Compensation ({surgeon_rate:.0f}%)", formulas)
         r += 1
 
-    # Contribution
+    # Contribution (formula)
     ws.cell(row=r, column=2, value="CONTRIBUTION").font = subsection_font
     r += 1
-    r = _write_row(ws, r, "CONTRIBUTION", pl_data['contribution'], bold=True)
+    if row_surgeon:
+        formulas = [f"={mcol(i)}{row_total_collected}-{mcol(i)}{row_total_overhead}-{mcol(i)}{row_surgeon}" for i in range(N)]
+    else:
+        formulas = [f"={mcol(i)}{row_total_collected}-{mcol(i)}{row_total_overhead}" for i in range(N)]
+    r = _write_formula_row(ws, r, "CONTRIBUTION", formulas, bold=True)
 
     # Style total rows
     for row_idx in range(4, r):
         label = ws.cell(row=row_idx, column=2).value
-        if label and ("TOTAL" in str(label) or "CONTRIBUTION" == str(label)):
+        if label and ("TOTAL" in str(label) or "CONTRIBUTION" == str(label).strip()):
             style_range(ws, row_idx, 2, last_col, border=bottom_border)
 
-    # Freeze panes
     ws.freeze_panes = "C7"
-
     return ws
 
 
@@ -2381,7 +2465,7 @@ def build_model(output_path: str = None):
     pl_by_loc = generate_pl_by_location(DEFAULT_ASSUMPTIONS)
     for loc_name in DEFAULT_ASSUMPTIONS.get('locations', ['Westlake']):
         if loc_name in pl_by_loc:
-            build_location_pl(wb, loc_name, pl_by_loc[loc_name])
+            build_location_pl(wb, loc_name, pl_by_loc[loc_name], asm)
             print(f"  Built {loc_name} P&L")
 
     print("Building Case Analytics...")
