@@ -19,8 +19,19 @@ def show():
     ds = DataStore.get()
     st.header("Surgery Volume Forecast")
 
-    bobas, gap = ds.get_surgery_volumes()
+    locations = ds.get_locations()
+    volumes_by_loc = ds.get_volumes_by_location()
     n_act = ds.n_actuals_2026
+
+    # Location selector
+    selected_loc = st.selectbox("Location", ["All Locations"] + locations, key="vol_loc")
+
+    if selected_loc == "All Locations":
+        bobas = [sum(volumes_by_loc[loc]['bobas'][i] for loc in locations) for i in range(N)]
+        gap = [sum(volumes_by_loc[loc]['gap'][i] for loc in locations) for i in range(N)]
+    else:
+        bobas = list(volumes_by_loc.get(selected_loc, {}).get('bobas', [0]*N))
+        gap = list(volumes_by_loc.get(selected_loc, {}).get('gap', [0]*N))
 
     # --- Historical Context ---
     st.subheader("Historical Volumes")
@@ -88,16 +99,28 @@ def show():
         with col3:
             ramp_months = st.number_input("Ramp months", 0, 24, 6)
         if st.button("Apply Quick Fill"):
-            for i in range(n_act, N):
-                months_since_start = i - n_act
+            # For location-specific, determine ramp start
+            ramp_start = n_act
+            if selected_loc == "Santa Barbara":
+                # SB ramp starts at lease start month
+                for exp in ds.get_expansions():
+                    if exp.get('name') == 'Santa Barbara' and exp.get('enabled'):
+                        ramp_start = max(n_act, exp.get('lease_start_month', 6))
+            for i in range(ramp_start, N):
+                months_since_start = i - ramp_start
                 if ramp_months > 0 and months_since_start < ramp_months:
                     pct = (months_since_start + 1) / ramp_months
-                    bobas[i] = max(bobas[n_act - 1] if n_act > 0 else 1, round(target_boba * pct))
-                    gap[i] = max(gap[n_act - 1] if n_act > 0 else 0, round(target_gap * pct))
+                    bobas[i] = max(0, round(target_boba * pct))
+                    gap[i] = max(0, round(target_gap * pct))
                 else:
                     bobas[i] = target_boba
                     gap[i] = target_gap
-            ds.set_surgery_volumes(bobas, gap)
+            if selected_loc == "All Locations":
+                ds.set_surgery_volumes(bobas, gap)
+            else:
+                vbl = ds.get_volumes_by_location()
+                vbl[selected_loc] = {'bobas': bobas, 'gap': gap}
+                ds.set_volumes_by_location(vbl)
             st.success("Volumes updated")
             st.rerun()
 
@@ -126,6 +149,11 @@ def show():
                     new_gap[idx] = g
 
     if changed and st.button("Save Volumes", type="primary"):
-        ds.set_surgery_volumes(new_bobas, new_gap)
+        if selected_loc == "All Locations":
+            ds.set_surgery_volumes(new_bobas, new_gap)
+        else:
+            vbl = ds.get_volumes_by_location()
+            vbl[selected_loc] = {'bobas': new_bobas, 'gap': new_gap}
+            ds.set_volumes_by_location(vbl)
         st.success("Volumes saved")
         st.rerun()

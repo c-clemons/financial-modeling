@@ -65,17 +65,72 @@ AVG_REVENUE_PER_SURGERY = 2288432.70 / TOTAL_SURGERIES_2025  # ~$19,728
 # SURGERY VOLUME DEFAULTS - BOBAS & GAP (60 months)
 # ============================================================
 
-# Bobas: Jan-Mar actuals [2,1,3], Apr-Dec forecast ramp 2→8, then flat 8 for 2027-2030
+# Westlake volumes: Jan-Mar actuals [2,1,3], Apr-Dec forecast ramp 2→8, then flat 8
 _bobas_actuals = [2, 1, 3]  # Jan-Mar 2026 from client data
 _bobas_forecast_apr_dec = [2, 3, 4, 4, 5, 5, 6, 7, 8]  # Apr-Dec 2026
 _bobas_2027_2030 = [8] * 48
-BOBAS_VOLUME_DEFAULT = _bobas_actuals + _bobas_forecast_apr_dec + _bobas_2027_2030
+_WESTLAKE_BOBAS = _bobas_actuals + _bobas_forecast_apr_dec + _bobas_2027_2030
 
-# GAP: Jan-Mar actuals [0,1,1], Apr-Dec forecast ramp 1→4, then flat 4 for 2027-2030
 _gap_actuals = [0, 1, 1]  # Jan-Mar 2026 from client data
 _gap_forecast_apr_dec = [1, 2, 2, 2, 3, 3, 3, 4, 4]  # Apr-Dec 2026
 _gap_2027_2030 = [4] * 48
-GAP_VOLUME_DEFAULT = _gap_actuals + _gap_forecast_apr_dec + _gap_2027_2030
+_WESTLAKE_GAP = _gap_actuals + _gap_forecast_apr_dec + _gap_2027_2030
+
+# Consolidated defaults (sum of all locations — backwards compatible)
+BOBAS_VOLUME_DEFAULT = _WESTLAKE_BOBAS  # updated below after VOLUMES_BY_LOCATION is defined
+GAP_VOLUME_DEFAULT = _WESTLAKE_GAP      # updated below
+
+# ============================================================
+# MULTI-LOCATION SUPPORT
+# ============================================================
+
+LOCATIONS = ['Westlake', 'Santa Barbara']
+
+# Per-location volumes: Westlake keeps existing forecast, SB ramps after lease start (month 6)
+_sb_bobas = [0]*6 + [1, 1, 2, 2, 3, 4] + [4]*48   # starts Jul-26, ramps to 4 over 12mo
+_sb_gap = [0]*6 + [0, 1, 1, 1, 1, 2] + [2]*48       # starts Jul-26, ramps to 2
+
+VOLUMES_BY_LOCATION = {
+    'Westlake': {
+        'bobas': list(BOBAS_VOLUME_DEFAULT),
+        'gap': list(GAP_VOLUME_DEFAULT),
+    },
+    'Santa Barbara': {
+        'bobas': _sb_bobas,
+        'gap': _sb_gap,
+    },
+}
+
+# Consolidated volumes (sum across all locations) — backwards compatible
+BOBAS_VOLUME_DEFAULT = [sum(loc['bobas'][i] for loc in VOLUMES_BY_LOCATION.values()) for i in range(NUM_FORECAST_MONTHS)]
+GAP_VOLUME_DEFAULT = [sum(loc['gap'][i] for loc in VOLUMES_BY_LOCATION.values()) for i in range(NUM_FORECAST_MONTHS)]
+
+# Per-location operating expenses
+OPEX_BY_LOCATION = {
+    'Westlake': {
+        'marketing_monthly': 8000.00,
+        'rent_monthly': 6250.00,
+        'contracts_monthly': 12000.00,
+        'office_software_monthly': 9000.00,
+    },
+    'Santa Barbara': {
+        'marketing_monthly': 3000.00,
+        'rent_monthly': 7500.00,      # from expansion config
+        'contracts_monthly': 3000.00,
+        'office_software_monthly': 2000.00,
+    },
+}
+
+# Shared overhead (allocated by revenue % across locations)
+SHARED_OVERHEAD = {
+    'legal_monthly_recurring': 3000.00,
+    'malpractice_annual': 7716.00,
+    'general_insurance_monthly': 570.00,
+    'health_insurance_monthly': 0,
+    'mgmt_fee_abc_monthly': 0,
+    'bank_fees_monthly': 100.00,
+}
+
 
 # Collection curves (values as percentages, must sum to 100)
 # Data-driven from actual paid cases:
@@ -217,12 +272,14 @@ BALANCE_SHEET_2025 = {
 #              None means slot is empty / not hired yet.
 # end_month: None means active through end of forecast.
 TEAM_ROSTER = [
+    # Westlake staff
     {
         'title': 'Herlyn',
         'monthly_salary': 11000,
         'employment_type': 'W-2',
         'start_month': 0,       # Jan 2026
         'end_month': None,
+        'location': 'Westlake',
         'notes': 'W-2 employee, $11K/mo',
     },
     {
@@ -231,6 +288,7 @@ TEAM_ROSTER = [
         'employment_type': 'W-2',
         'start_month': 0,       # Jan 2026
         'end_month': None,
+        'location': 'Westlake',
         'notes': 'W-2 employee, $10K/mo',
     },
     {
@@ -240,6 +298,7 @@ TEAM_ROSTER = [
         'start_month': 0,       # Jan 2026
         'end_month': 2,         # Last day March 20, 2026
         'partial_last_month': 20 / 31,
+        'location': 'Westlake',
         'notes': 'W-2 employee, 40hr/wk. Last day 3/20/2026.',
     },
     {
@@ -248,20 +307,30 @@ TEAM_ROSTER = [
         'employment_type': 'Contractor',
         'start_month': 0,
         'end_month': None,
+        'location': 'Westlake',
         'notes': 'Via NMed Consulting agency (Philippines) - $16/hour',
     },
-    # Slots 5-15: open for new hires
-    {'title': 'New Hire 5', 'monthly_salary': 5200, 'employment_type': 'W-2', 'start_month': None, 'end_month': None, 'notes': ''},
-    {'title': 'New Hire 6', 'monthly_salary': 5200, 'employment_type': 'W-2', 'start_month': None, 'end_month': None, 'notes': ''},
-    {'title': 'New Hire 7', 'monthly_salary': 5200, 'employment_type': 'W-2', 'start_month': None, 'end_month': None, 'notes': ''},
-    {'title': 'New Hire 8', 'monthly_salary': 5200, 'employment_type': 'W-2', 'start_month': None, 'end_month': None, 'notes': ''},
-    {'title': 'New Hire 9', 'monthly_salary': 5200, 'employment_type': 'W-2', 'start_month': None, 'end_month': None, 'notes': ''},
-    {'title': 'New Hire 10', 'monthly_salary': 5200, 'employment_type': 'W-2', 'start_month': None, 'end_month': None, 'notes': ''},
-    {'title': 'New Hire 11', 'monthly_salary': 5200, 'employment_type': 'W-2', 'start_month': None, 'end_month': None, 'notes': ''},
-    {'title': 'New Hire 12', 'monthly_salary': 5200, 'employment_type': 'W-2', 'start_month': None, 'end_month': None, 'notes': ''},
-    {'title': 'New Hire 13', 'monthly_salary': 5200, 'employment_type': 'W-2', 'start_month': None, 'end_month': None, 'notes': ''},
-    {'title': 'New Hire 14', 'monthly_salary': 5200, 'employment_type': 'W-2', 'start_month': None, 'end_month': None, 'notes': ''},
-    {'title': 'New Hire 15', 'monthly_salary': 5200, 'employment_type': 'W-2', 'start_month': None, 'end_month': None, 'notes': ''},
+    # Santa Barbara staff
+    {
+        'title': 'SB Office Manager',
+        'monthly_salary': 5200,
+        'employment_type': 'W-2',
+        'start_month': 6,       # Jul 2026 (lease start)
+        'end_month': None,
+        'location': 'Santa Barbara',
+        'notes': 'Santa Barbara office manager',
+    },
+    # Slots 6-15: open for new hires (location assignable)
+    {'title': 'New Hire 6', 'monthly_salary': 5200, 'employment_type': 'W-2', 'start_month': None, 'end_month': None, 'location': 'Westlake', 'notes': ''},
+    {'title': 'New Hire 7', 'monthly_salary': 5200, 'employment_type': 'W-2', 'start_month': None, 'end_month': None, 'location': 'Westlake', 'notes': ''},
+    {'title': 'New Hire 8', 'monthly_salary': 5200, 'employment_type': 'W-2', 'start_month': None, 'end_month': None, 'location': 'Santa Barbara', 'notes': ''},
+    {'title': 'New Hire 9', 'monthly_salary': 5200, 'employment_type': 'W-2', 'start_month': None, 'end_month': None, 'location': 'Santa Barbara', 'notes': ''},
+    {'title': 'New Hire 10', 'monthly_salary': 5200, 'employment_type': 'W-2', 'start_month': None, 'end_month': None, 'location': 'Westlake', 'notes': ''},
+    {'title': 'New Hire 11', 'monthly_salary': 5200, 'employment_type': 'W-2', 'start_month': None, 'end_month': None, 'location': 'Westlake', 'notes': ''},
+    {'title': 'New Hire 12', 'monthly_salary': 5200, 'employment_type': 'W-2', 'start_month': None, 'end_month': None, 'location': 'Santa Barbara', 'notes': ''},
+    {'title': 'New Hire 13', 'monthly_salary': 5200, 'employment_type': 'W-2', 'start_month': None, 'end_month': None, 'location': 'Santa Barbara', 'notes': ''},
+    {'title': 'New Hire 14', 'monthly_salary': 5200, 'employment_type': 'W-2', 'start_month': None, 'end_month': None, 'location': 'Westlake', 'notes': ''},
+    {'title': 'New Hire 15', 'monthly_salary': 5200, 'employment_type': 'W-2', 'start_month': None, 'end_month': None, 'location': 'Westlake', 'notes': ''},
 ]
 
 PAYROLL_2025_TOTAL = {
@@ -362,12 +431,26 @@ DEFAULT_ASSUMPTIONS = {
     # Inflation (applied to fixed expenses, NOT %-of-revenue items)
     'expense_annual_inflation': 3.0,  # 3% annual increase
 
-    # OpEx
+    # OpEx (legacy consolidated — used by existing functions for backwards compat)
     'marketing_monthly': 8000.00,
     'rent_westlake_monthly': 6250.00,
     'office_software_monthly': 9000.00,
     'contracts_monthly': 12000.00,
     'nmed_va_monthly': 0,
+
+    # Multi-location support
+    'locations': LOCATIONS,
+    'volumes_by_location': VOLUMES_BY_LOCATION,
+    'opex_by_location': OPEX_BY_LOCATION,
+    'shared_overhead': SHARED_OVERHEAD,
+    'shared_overhead_allocation': 'revenue_pct',
+    'team_roster': TEAM_ROSTER,
+
+    # Per-surgeon compensation at expansion locations
+    # Surgeons at new locations get a % of their location's collections
+    'surgeon_compensation': {
+        'Santa Barbara': {'rate': 70, 'surgeon_name': 'TBD'},
+    },
 
     # Multi-Location Expansions (5 slots)
     'expansions': [

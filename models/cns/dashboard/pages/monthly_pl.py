@@ -76,9 +76,21 @@ def show():
     with tab_forecast:
         st.subheader("2026-2030 Forecast (Cash Basis)")
 
-        # Run forecast
-        forecast = ds.run_forecast()
-        pl = forecast['pl']
+        # Run per-location forecast
+        forecast = ds.run_forecast_by_location()
+        pl_by_loc = forecast['pl_by_location']
+        locations = ds.get_locations()
+
+        # Location selector
+        col1, col2, col3 = st.columns([2, 1, 1])
+        with col1:
+            view_options = ["Consolidated"] + locations
+            selected_view = st.selectbox("View", view_options, key="pl_view")
+
+        if selected_view == "Consolidated":
+            pl = pl_by_loc['consolidated']
+        else:
+            pl = pl_by_loc[selected_view]
 
         # Controls
         col1, col2 = st.columns(2)
@@ -91,43 +103,69 @@ def show():
         n_act = ds.n_actuals_2026
         qbo = ds.actuals_2026
 
-        # Build P&L rows
+        # Build P&L rows — handle both consolidated and per-location keys
         rows = {}
+        _g = lambda key, default=None: pl.get(key, default or [0.0]*60)
 
         # Surgery volumes
-        rows["Bobas Volume"] = pl['bobas_volume'][:show_months]
-        rows["GAP Volume"] = pl['gap_volume'][:show_months]
-        rows["Total Surgeries"] = pl['total_volume'][:show_months]
+        rows["Bobas Volume"] = _g('bobas_volume')[:show_months]
+        rows["GAP Volume"] = _g('gap_volume')[:show_months]
+        rows["Total Surgeries"] = _g('total_volume')[:show_months]
 
         if show_accrual:
             rows["---"] = [None] * show_months
-            rows["Bobas Earned (Accrual)"] = pl['bobas_earned'][:show_months]
-            rows["GAP Earned (Accrual)"] = pl['gap_earned'][:show_months]
-            rows["Total Earned (Accrual)"] = pl['total_earned'][:show_months]
+            rows["Bobas Earned (Accrual)"] = _g('bobas_earned')[:show_months]
+            rows["GAP Earned (Accrual)"] = _g('gap_earned')[:show_months]
+            rows["Total Earned (Accrual)"] = _g('total_earned')[:show_months]
 
         rows[""] = [None] * show_months
         rows["CASH COLLECTED"] = [None] * show_months
-        rows["  Bobas Collected"] = pl['bobas_collected'][:show_months]
-        rows["  GAP Collected"] = pl['gap_collected'][:show_months]
-        rows["  Historical AR"] = [pl['historical_ar_boba'][i] + pl['historical_ar_gap'][i] for i in range(len(pl['historical_ar_boba']))][:show_months]
-        rows["TOTAL INCOME"] = pl['total_collected'][:show_months]
+        rows["  Bobas Collected"] = _g('bobas_collected')[:show_months]
+        rows["  GAP Collected"] = _g('gap_collected')[:show_months]
+
+        # Historical AR only on consolidated view
+        hist_ar = _g('historical_ar')
+        if not any(v != 0 for v in hist_ar[:show_months]):
+            # Try consolidated keys
+            boba_ar = _g('historical_ar_boba')
+            gap_ar = _g('historical_ar_gap')
+            hist_ar = [boba_ar[i] + gap_ar[i] for i in range(min(len(boba_ar), 60))]
+        rows["  Historical AR"] = hist_ar[:show_months]
+
+        # Total income: use total_income if available (consolidated), else total_collected
+        total_income = _g('total_income') if 'total_income' in pl else _g('total_collected')
+        rows["TOTAL INCOME"] = total_income[:show_months]
 
         rows[" "] = [None] * show_months
         rows["OVERHEAD"] = [None] * show_months
-        rows["  Billing (18%)"] = pl['billing_fees'][:show_months]
-        rows["  Payroll (W-2)"] = pl['payroll'][:show_months]
-        rows["  Contractors"] = pl['contractors'][:show_months]
-        rows["  Operating Expenses"] = pl['total_opex'][:show_months]
-        rows["  Expansion Costs"] = pl.get('expansion_total', [0]*60)[:show_months]
-        rows["TOTAL OVERHEAD"] = pl['total_overhead'][:show_months]
+        rows["  Billing (18%)"] = _g('billing_fees')[:show_months]
+        rows["  Payroll (W-2)"] = _g('payroll')[:show_months]
+        rows["  Contractors"] = _g('contractors')[:show_months]
+        rows["  Operating Expenses"] = _g('direct_opex', _g('total_opex'))[:show_months]
+        rows["  Expansion Costs"] = _g('expansion_costs', _g('expansion_total'))[:show_months]
+
+        # Shared overhead allocation (per-location only)
+        if selected_view != "Consolidated" and 'shared_overhead_allocation' in pl:
+            rows["  Shared Overhead"] = _g('shared_overhead_allocation')[:show_months]
+
+        rows["TOTAL OVERHEAD"] = _g('total_overhead')[:show_months]
+
+        # Surgeon compensation (per-location only)
+        surgeon_pay = _g('surgeon_compensation')
+        if any(v != 0 for v in surgeon_pay[:show_months]):
+            rows["  Surgeon Compensation"] = surgeon_pay[:show_months]
 
         rows["  "] = [None] * show_months
-        rows["NET EQUITY"] = pl['net_equity'][:show_months]
-        rows["  Physician (90%)"] = pl['physician_services'][:show_months]
-        rows["NET INCOME (CNS)"] = pl['net_income'][:show_months]
 
-        # Overlay actuals for Jan/Feb
-        if n_act > 0:
+        if selected_view == "Consolidated":
+            rows["NET EQUITY"] = _g('net_equity')[:show_months]
+            rows["  Physician (90%)"] = _g('physician_services')[:show_months]
+            rows["NET INCOME (CNS)"] = _g('net_income')[:show_months]
+        else:
+            rows["CONTRIBUTION"] = _g('contribution')[:show_months]
+
+        # Overlay actuals for Jan/Feb (only on consolidated view)
+        if n_act > 0 and selected_view == "Consolidated":
             for i in range(n_act):
                 rows["TOTAL INCOME"][i] = qbo['total_income'][i]
                 rows["  Bobas Collected"][i] = 0
@@ -153,7 +191,7 @@ def show():
         df.index.name = "Line Item"
 
         # Style
-        bold_rows = ["TOTAL INCOME", "TOTAL OVERHEAD", "NET EQUITY", "NET INCOME (CNS)", "Total Surgeries"]
+        bold_rows = ["TOTAL INCOME", "TOTAL OVERHEAD", "NET EQUITY", "NET INCOME (CNS)", "Total Surgeries", "CONTRIBUTION"]
 
         def _style(row):
             styles = []

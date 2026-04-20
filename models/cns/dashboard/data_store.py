@@ -20,11 +20,13 @@ from baseline_data import (
 )
 from financial_calcs import (
     generate_monthly_pl_forecast,
+    generate_pl_by_location,
     generate_cash_flow_forecast,
     calculate_dashboard_metrics,
     forecast_expansion_costs,
     forecast_payroll,
 )
+from baseline_data import LOCATIONS
 
 DATA_DIR = Path(__file__).parent / "data"
 N = NUM_FORECAST_MONTHS
@@ -112,6 +114,29 @@ class DataStore:
         self.save_overrides()
 
     # ------------------------------------------------------------------
+    # Locations
+    # ------------------------------------------------------------------
+    def get_locations(self) -> list:
+        return self.merged.get('locations', LOCATIONS)
+
+    def get_volumes_by_location(self) -> dict:
+        return self.merged.get('volumes_by_location', {})
+
+    def set_volumes_by_location(self, volumes: dict):
+        self.overrides['volumes_by_location'] = volumes
+        # Also update consolidated for backwards compat
+        bobas_cons = [0] * N
+        gap_cons = [0] * N
+        for loc_data in volumes.values():
+            for i in range(N):
+                bobas_cons[i] += loc_data.get('bobas', [0]*N)[i]
+                gap_cons[i] += loc_data.get('gap', [0]*N)[i]
+        self.overrides['bobas_volume'] = bobas_cons
+        self.overrides['gap_volume'] = gap_cons
+        self.merged = self._deep_merge(self.defaults, self.overrides)
+        self.save_overrides()
+
+    # ------------------------------------------------------------------
     # Forecast (runs calculations)
     # ------------------------------------------------------------------
     def run_forecast(self) -> dict:
@@ -119,6 +144,12 @@ class DataStore:
         pl = generate_monthly_pl_forecast(a)
         cf = generate_cash_flow_forecast(a)
         return {'pl': pl, 'cf': cf}
+
+    def run_forecast_by_location(self) -> dict:
+        a = self.get_assumptions()
+        pl_by_loc = generate_pl_by_location(a)
+        cf = generate_cash_flow_forecast(a)
+        return {'pl_by_location': pl_by_loc, 'cf': cf}
 
     def run_dashboard_metrics(self) -> dict:
         return calculate_dashboard_metrics(self.get_assumptions())

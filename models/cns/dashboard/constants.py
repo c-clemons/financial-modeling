@@ -6,7 +6,7 @@ from pathlib import Path
 # Add parent so we can import baseline_data
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from baseline_data import FORECAST_MONTH_LABELS, NUM_FORECAST_MONTHS, MONTHS_12
+from baseline_data import FORECAST_MONTH_LABELS, NUM_FORECAST_MONTHS, MONTHS_12, LOCATIONS
 
 N = NUM_FORECAST_MONTHS  # 60
 

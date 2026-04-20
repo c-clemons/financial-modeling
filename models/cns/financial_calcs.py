@@ -328,6 +328,200 @@ def generate_monthly_pl_forecast(
     }
 
 
+def generate_pl_by_location(assumptions: Dict = None) -> Dict[str, Dict]:
+    """
+    Per-location P&L with consolidated rollup.
+
+    Returns:
+        {
+            'Westlake': {per-location P&L dict},
+            'Santa Barbara': {per-location P&L dict},
+            'consolidated': {aggregated P&L dict},
+        }
+    """
+    from baseline_data import HISTORICAL_AR_BOBA, HISTORICAL_AR_GAP
+
+    a = assumptions or get_default_assumptions()
+    locations = a.get('locations', ['Westlake'])
+    volumes_by_loc = a.get('volumes_by_location', {})
+    opex_by_loc = a.get('opex_by_location', {})
+    shared_overhead = a.get('shared_overhead', {})
+    team = a.get('team_roster', TEAM_ROSTER)
+
+    avg_rev_bobas = a.get('avg_revenue_bobas', 132000)
+    avg_rev_gap = a.get('avg_revenue_gap', 50000)
+    bobas_curve = a.get('bobas_collection_curve', [0, 0, 3, 0, 0, 27, 10, 32, 23, 0, 5, 0])
+    gap_curve = a.get('gap_collection_curve', [0, 55, 10, 10, 25])
+    billing_rate = a.get('billing_fee_rate', 18) / 100
+    inflation = a.get('expense_annual_inflation', 3.0) / 100
+    payroll_tax_rate = a.get('payroll_tax_rate', 8.6)
+    salary_increase = a.get('salary_annual_increase', 5.0)
+    surgeon_comp = a.get('surgeon_compensation', {})
+
+    result = {}
+
+    # --- Per-location calculations ---
+    for loc in locations:
+        loc_vols = volumes_by_loc.get(loc, {'bobas': [0]*N, 'gap': [0]*N})
+        bobas_vol = loc_vols.get('bobas', [0]*N)
+        gap_vol = loc_vols.get('gap', [0]*N)
+
+        # Revenue
+        bobas_earned, bobas_collected = forecast_bobas_revenue(
+            bobas_vol, avg_rev_bobas, bobas_curve)
+        gap_earned, gap_collected = forecast_gap_revenue(
+            gap_vol, avg_rev_gap, gap_curve)
+
+        total_volume = [bobas_vol[i] + gap_vol[i] for i in range(N)]
+        total_earned = [bobas_earned[i] + gap_earned[i] for i in range(N)]
+        total_collected = [bobas_collected[i] + gap_collected[i] for i in range(N)]
+
+        # Billing
+        billing = [total_collected[i] * billing_rate for i in range(N)]
+
+        # Payroll (filtered by location)
+        loc_team = [p for p in team if p.get('location') == loc]
+        if loc_team:
+            _, _, payroll_total, contractors = forecast_payroll(
+                loc_team, payroll_tax_rate, salary_increase)
+        else:
+            payroll_total = [0.0] * N
+            contractors = [0.0] * N
+
+        # Direct OpEx (location-specific)
+        loc_opex = opex_by_loc.get(loc, {})
+        def _escalated(base_val):
+            return [base_val * (1 + inflation) ** (i // 12) for i in range(N)]
+
+        direct_opex = [0.0] * N
+        opex_detail = {}
+        for key, val in loc_opex.items():
+            escalated = _escalated(val)
+            opex_detail[key] = escalated
+            for i in range(N):
+                direct_opex[i] += escalated[i]
+
+        # Expansion costs for this location (from expansion config)
+        loc_expansion = [0.0] * N
+        for exp in a.get('expansions', []):
+            if exp.get('name') == loc and exp.get('enabled'):
+                exp_result = forecast_expansion_costs({'expansions': [exp],
+                                                       'expense_annual_inflation': a.get('expense_annual_inflation', 3.0)})
+                loc_expansion = exp_result.get('total', [0.0] * N)
+
+        # Total direct overhead (before shared allocation)
+        direct_overhead = [
+            billing[i] + payroll_total[i] + contractors[i] + direct_opex[i] + loc_expansion[i]
+            for i in range(N)
+        ]
+
+        # Surgeon compensation at this location
+        loc_surgeon = surgeon_comp.get(loc, {})
+        surgeon_rate = loc_surgeon.get('rate', 0) / 100
+        surgeon_pay = [total_collected[i] * surgeon_rate for i in range(N)]
+
+        # Contribution (before shared overhead allocation)
+        contribution = [total_collected[i] - direct_overhead[i] - surgeon_pay[i] for i in range(N)]
+
+        result[loc] = {
+            'bobas_volume': bobas_vol,
+            'gap_volume': gap_vol,
+            'total_volume': total_volume,
+            'bobas_earned': bobas_earned,
+            'gap_earned': gap_earned,
+            'total_earned': total_earned,
+            'bobas_collected': bobas_collected,
+            'gap_collected': gap_collected,
+            'total_collected': total_collected,
+            'billing_fees': billing,
+            'payroll': payroll_total,
+            'contractors': contractors,
+            'direct_opex': direct_opex,
+            'opex_detail': opex_detail,
+            'expansion_costs': loc_expansion,
+            'direct_overhead': direct_overhead,
+            'surgeon_compensation': surgeon_pay,
+            'surgeon_rate': surgeon_rate * 100,
+            'contribution': contribution,
+        }
+
+    # --- Shared overhead allocation (by revenue %) ---
+    # Calculate each location's share of total collections
+    total_all_collected = [0.0] * N
+    for loc in locations:
+        for i in range(N):
+            total_all_collected[i] += result[loc]['total_collected'][i]
+
+    # Shared overhead pool
+    shared_pool = [0.0] * N
+    malpractice_monthly = shared_overhead.get('malpractice_annual', 0) / 12
+    shared_monthly = (
+        shared_overhead.get('legal_monthly_recurring', 0)
+        + shared_overhead.get('general_insurance_monthly', 0)
+        + shared_overhead.get('health_insurance_monthly', 0)
+        + shared_overhead.get('mgmt_fee_abc_monthly', 0)
+        + shared_overhead.get('bank_fees_monthly', 0)
+        + malpractice_monthly
+    )
+    for i in range(N):
+        shared_pool[i] = shared_monthly * (1 + inflation) ** (i // 12)
+
+    # Allocate by revenue %
+    for loc in locations:
+        allocation = [0.0] * N
+        for i in range(N):
+            if total_all_collected[i] > 0:
+                share = result[loc]['total_collected'][i] / total_all_collected[i]
+            else:
+                share = 1.0 / len(locations)
+            allocation[i] = shared_pool[i] * share
+        result[loc]['shared_overhead_allocation'] = allocation
+        result[loc]['total_overhead'] = [
+            result[loc]['direct_overhead'][i] + allocation[i]
+            for i in range(N)
+        ]
+        # Update contribution to include shared overhead
+        result[loc]['contribution'] = [
+            result[loc]['total_collected'][i]
+            - result[loc]['total_overhead'][i]
+            - result[loc]['surgeon_compensation'][i]
+            for i in range(N)
+        ]
+
+    # --- Consolidated ---
+    cons = {k: [0.0] * N for k in [
+        'bobas_volume', 'gap_volume', 'total_volume',
+        'total_earned', 'total_collected',
+        'billing_fees', 'payroll', 'contractors',
+        'direct_opex', 'expansion_costs', 'total_overhead',
+        'surgeon_compensation', 'contribution',
+    ]}
+    for loc in locations:
+        for key in cons:
+            if key in result[loc]:
+                for i in range(N):
+                    cons[key][i] += result[loc][key][i]
+
+    # Historical AR (consolidated — all historical cases are Westlake)
+    historical_ar = [HISTORICAL_AR_BOBA[i] + HISTORICAL_AR_GAP[i] for i in range(N)]
+    cons['historical_ar'] = historical_ar
+    cons['total_income'] = [cons['total_collected'][i] + historical_ar[i] for i in range(N)]
+
+    # Fund flow at consolidated level
+    phys_rate = a.get('physician_services_rate', 90) / 100
+    net_equity = [cons['total_income'][i] - cons['total_overhead'][i] - cons['surgeon_compensation'][i] for i in range(N)]
+    physician = [max(0, net_equity[i] * phys_rate) for i in range(N)]
+    net_income = [net_equity[i] - physician[i] for i in range(N)]
+
+    cons['net_equity'] = net_equity
+    cons['physician_services'] = physician
+    cons['net_income'] = net_income
+    cons['shared_overhead_pool'] = shared_pool
+
+    result['consolidated'] = cons
+    return result
+
+
 def generate_cash_flow_forecast(
     assumptions: Dict = None,
 ) -> Dict[str, List[float]]:
