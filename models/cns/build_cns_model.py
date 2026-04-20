@@ -1056,30 +1056,27 @@ def build_assumptions(wb):
             cell.border = thin_border; cell.alignment = right_align
         loc_sched['payroll'] = payroll_row
 
-        # Contractors: reference contractor breakdown rows
+        # Contractors: build individual per-person contractor rows inline,
+        # then sum. Each person checks: location match, type=Contractor,
+        # start/end date, and applies salary escalation.
         loc_sched['contractors'] = r
         ws.cell(row=r, column=2, value=f"  Contractors ({loc_name})").font = data_font
-        # Contractor rows are in a separate section. For simplicity, use SUMPRODUCT
-        # that checks if person is a contractor AND location matches, referencing
-        # the same payroll breakdown rows (which output 0 for contractors since
-        # those rows check for "W-2"). Instead, reference the contractor section.
-        contractor_first = asm.get('contractor_breakdown_first', payroll_first)
-        contractor_last = asm.get('contractor_breakdown_last', payroll_last)
         for i in range(N):
             col_letter = mcol(i)
-            # For contractors, the individual rows are in the contractor section
-            # But there might be only 1 contractor row. Use SUMPRODUCT on roster:
-            # Check each person: if contractor AND location matches, get their salary
-            # with escalation applied. Since contractor breakdown rows also have
-            # the date logic, reference those if available.
-            # Simplest: use same approach as payroll but check "Contractor" type
-            f = (f'=SUMPRODUCT(($H${team_start}:$H${team_end}="{loc_name}")'
-                 f'*($F${team_start}:$F${team_end}="Contractor")'
-                 f'*IF($D${team_start}:$D${team_end}<>"",1,0)'
-                 f'*IF(COLUMN()-2>=$D${team_start}:$D${team_end},1,0)'
-                 f'*IF(OR($E${team_start}:$E${team_end}="",COLUMN()-2<=$E${team_start}:$E${team_end}),1,0)'
-                 f'*$C${team_start}:$C${team_end}'
-                 f'*(1+$C${asm["sal_rate_row"]}/100)^INT((COLUMN()-2)/12))')
+            # Sum each person's contractor pay if they match this location
+            terms = []
+            for j, person_row in enumerate(asm['team_rows']):
+                # IF(location=loc AND type=Contractor AND active, salary*escalator, 0)
+                f_person = (
+                    f'IF(AND($H${person_row}="{loc_name}",'
+                    f'$F${person_row}="Contractor",'
+                    f'$D${person_row}<>"",'
+                    f'COLUMN()-2>=$D${person_row},'
+                    f'OR($E${person_row}="",COLUMN()-2<=$E${person_row})),'
+                    f'$C${person_row}*(1+$C${asm["sal_rate_row"]}/100)^INT((COLUMN()-2)/12),0)'
+                )
+                terms.append(f_person)
+            f = "=" + "+".join(terms)
             cell = ws.cell(row=r, column=3 + i, value=f)
             cell.font = data_font; cell.number_format = CURR
             cell.border = thin_border; cell.alignment = right_align
