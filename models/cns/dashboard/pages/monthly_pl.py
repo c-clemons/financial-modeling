@@ -210,29 +210,21 @@ def show():
                 return ""
             return f"${val:,.0f}"
 
-        def _fmt_row_aware(row):
-            """Format each cell based on its row name."""
-            result = []
-            is_volume = row.name in volume_rows
-            for val in row:
-                if not isinstance(val, (int, float)):
-                    result.append("")
-                elif is_volume:
-                    result.append(f"{int(val):,}")
-                else:
-                    result.append(f"${val:,.0f}")
-            return result
+        def _fmt_cell(val, row_name):
+            if not isinstance(val, (int, float)):
+                return ""
+            if row_name in volume_rows:
+                return f"{int(val):,}"
+            return f"${val:,.0f}"
 
-        # Convert to string DataFrame for display
-        display_df = df.apply(_fmt_row_aware, axis=1, result_type="broadcast")
+        # Build pre-formatted string DataFrame
+        display_data = {}
+        for col in df.columns:
+            display_data[col] = [_fmt_cell(df.loc[row, col], row) for row in df.index]
+        display_df = pd.DataFrame(display_data, index=df.index)
+        display_df.index.name = "Line Item"
 
-        st.dataframe(
-            display_df.style.apply(_style, axis=1).format(
-                lambda x: x,  # already formatted as strings
-                na_rep="",
-            ),
-            use_container_width=True, height=700,
-        )
+        st.dataframe(display_df, use_container_width=True, height=700)
 
         # Year summaries
         st.subheader("Annual Summary")
