@@ -651,6 +651,7 @@ def build_assumptions(wb):
     r += 1
 
     # 15 per-person salary rows
+    asm['payroll_breakdown_first'] = r  # first individual payroll row
     person_salary_rows = []
     for idx, person_row in enumerate(asm['team_rows']):
         person_name = TEAM_ROSTER[idx]['title']
@@ -669,6 +670,8 @@ def build_assumptions(wb):
             cell.alignment = right_align
         person_salary_rows.append(r)
         r += 1
+
+    asm['payroll_breakdown_last'] = r - 1  # last individual payroll row
 
     # Total Salaries
     row_total_sal = r
@@ -1010,30 +1013,73 @@ def build_assumptions(wb):
         # So: =SUMPRODUCT(($H$132:$H$146="Westlake")*({payroll_row_range}))
 
         # Overwrite the payroll row we just created
-        payroll_row = r - 1  # we already incremented
+        # Reference the PAYROLL BREAKDOWN rows (226-240) which already have
+        # hire/fire date logic and salary escalation built in.
+        # SUMPRODUCT filters these by matching location in the roster.
+        payroll_breakdown_first = asm['team_rows'][0]   # first individual payroll row (226)
+        payroll_breakdown_last = asm['team_rows'][-1]    # last individual payroll row (240)
+        # Wait - team_rows stores ROSTER rows (132-146), not payroll rows (226-240)
+        # The payroll breakdown rows are offset from team_rows.
+        # Payroll breakdown starts at a known row. Let me find it from asm.
+        # The individual payroll rows start right after "PAYROLL BREAKDOWN" header.
+        # They are: asm['team_rows'][0] mapped to payroll row via offset.
+        # Actually, in the build script, individual payroll rows are built sequentially
+        # starting from r after the "PAYROLL BREAKDOWN" section header.
+        # Let me use the stored row numbers directly.
+
+        # The payroll breakdown rows correspond 1:1 with team_rows.
+        # Payroll row for person j = payroll_section_start + j
+        # We need to find payroll_section_start from asm.
+        # It's stored implicitly: Total Salaries row (asm['sched_payroll'] area)
+        # Row 241 = Total Salaries = SUM(C226:C240), so individual rows are 226-240.
+        # Total Salaries row = asm.get('total_salaries_row')
+        # Individual payroll starts 15 rows before that.
+        # Simpler: just hardcode the offset from known structure.
+
+        # From the output: R226=Herlyn, R240=New Hire 15, R241=Total Salaries
+        # These are always at team_rows offset. Let me compute:
+        # first_person in payroll = first payroll breakdown row
+        # This was set during the PAYROLL BREAKDOWN build section
+        payroll_first = asm.get('payroll_breakdown_first', first_person)
+        payroll_last = asm.get('payroll_breakdown_last', last_person)
+
+        payroll_row = r - 1
         for i in range(N):
             col_letter = mcol(i)
-            # Sum individual payroll amounts where location matches
-            # Individual payroll rows: first_person to last_person in payroll breakdown
-            # These correspond 1:1 to team_start:team_end in the roster
+            # SUMPRODUCT: location match * payroll amounts (which include hire/fire + escalation)
+            # Then add payroll tax % + processing fee
             f = (f'=SUMPRODUCT(($H${team_start}:$H${team_end}="{loc_name}")'
-                 f'*($F${team_start}:$F${team_end}="W-2")'
-                 f'*({col_letter}{first_person}:{col_letter}{last_person}))'
-                 f'*(1+$C${asm["payroll_tax_row"]}/100)')  # include payroll taxes
+                 f'*({col_letter}{payroll_first}:{col_letter}{payroll_last}))'
+                 f'*(1+$C${asm["payroll_tax_row"]}/100)')
             cell = ws.cell(row=payroll_row, column=3 + i, value=f)
             cell.font = data_font; cell.number_format = CURR
             cell.border = thin_border; cell.alignment = right_align
         loc_sched['payroll'] = payroll_row
 
-        # Contractors: same approach
+        # Contractors: reference contractor breakdown rows
         loc_sched['contractors'] = r
         ws.cell(row=r, column=2, value=f"  Contractors ({loc_name})").font = data_font
-        contractor_section_start = asm.get('contractor_breakdown_start', first_person)
+        # Contractor rows are in a separate section. For simplicity, use SUMPRODUCT
+        # that checks if person is a contractor AND location matches, referencing
+        # the same payroll breakdown rows (which output 0 for contractors since
+        # those rows check for "W-2"). Instead, reference the contractor section.
+        contractor_first = asm.get('contractor_breakdown_first', payroll_first)
+        contractor_last = asm.get('contractor_breakdown_last', payroll_last)
         for i in range(N):
             col_letter = mcol(i)
+            # For contractors, the individual rows are in the contractor section
+            # But there might be only 1 contractor row. Use SUMPRODUCT on roster:
+            # Check each person: if contractor AND location matches, get their salary
+            # with escalation applied. Since contractor breakdown rows also have
+            # the date logic, reference those if available.
+            # Simplest: use same approach as payroll but check "Contractor" type
             f = (f'=SUMPRODUCT(($H${team_start}:$H${team_end}="{loc_name}")'
                  f'*($F${team_start}:$F${team_end}="Contractor")'
-                 f'*({col_letter}{first_person}:{col_letter}{last_person}))')
+                 f'*IF($D${team_start}:$D${team_end}<>"",1,0)'
+                 f'*IF(COLUMN()-2>=$D${team_start}:$D${team_end},1,0)'
+                 f'*IF(OR($E${team_start}:$E${team_end}="",COLUMN()-2<=$E${team_start}:$E${team_end}),1,0)'
+                 f'*$C${team_start}:$C${team_end}'
+                 f'*(1+$C${asm["sal_rate_row"]}/100)^INT((COLUMN()-2)/12))')
             cell = ws.cell(row=r, column=3 + i, value=f)
             cell.font = data_font; cell.number_format = CURR
             cell.border = thin_border; cell.alignment = right_align
