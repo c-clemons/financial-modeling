@@ -900,6 +900,83 @@ def build_assumptions(wb):
     r += 1  # blank
 
     # ================================================================
+    # PER-LOCATION SCHEDULES (payroll, opex, expansion by location)
+    # Each location P&L tab references these rows via formulas.
+    # ================================================================
+    from baseline_data import LOCATIONS, OPEX_BY_LOCATION
+    from financial_calcs import generate_pl_by_location
+
+    locations = a.get('locations', LOCATIONS)
+    pl_by_loc = generate_pl_by_location(a)
+
+    asm['loc_schedules'] = {}
+
+    section_bar(ws, r, 2, 2 + N, "PER-LOCATION SCHEDULES")
+    r += 1
+
+    for loc_name in locations:
+        loc_pl = pl_by_loc.get(loc_name, {})
+        loc_sched = {}
+
+        ws.cell(row=r, column=2, value=f"--- {loc_name} ---").font = subsection_font
+        r += 1
+
+        # Payroll
+        loc_sched['payroll'] = r
+        ws.cell(row=r, column=2, value=f"  Payroll ({loc_name})").font = data_font
+        payroll_data = loc_pl.get('payroll', [0.0] * N)
+        for i in range(N):
+            cell = ws.cell(row=r, column=3 + i, value=round(payroll_data[i], 2))
+            cell.font = input_font; cell.number_format = CURR
+            cell.fill = input_fill; cell.border = thin_border; cell.alignment = right_align
+        r += 1
+
+        # Contractors
+        loc_sched['contractors'] = r
+        ws.cell(row=r, column=2, value=f"  Contractors ({loc_name})").font = data_font
+        contractor_data = loc_pl.get('contractors', [0.0] * N)
+        for i in range(N):
+            cell = ws.cell(row=r, column=3 + i, value=round(contractor_data[i], 2))
+            cell.font = input_font; cell.number_format = CURR
+            cell.fill = input_fill; cell.border = thin_border; cell.alignment = right_align
+        r += 1
+
+        # Direct OpEx
+        loc_sched['opex'] = r
+        ws.cell(row=r, column=2, value=f"  OpEx ({loc_name})").font = data_font
+        opex_data = loc_pl.get('direct_opex', [0.0] * N)
+        for i in range(N):
+            cell = ws.cell(row=r, column=3 + i, value=round(opex_data[i], 2))
+            cell.font = input_font; cell.number_format = CURR
+            cell.fill = input_fill; cell.border = thin_border; cell.alignment = right_align
+        r += 1
+
+        # Expansion Costs
+        loc_sched['expansion'] = r
+        ws.cell(row=r, column=2, value=f"  Expansion ({loc_name})").font = data_font
+        expansion_data = loc_pl.get('expansion_costs', [0.0] * N)
+        for i in range(N):
+            cell = ws.cell(row=r, column=3 + i, value=round(expansion_data[i], 2))
+            cell.font = input_font; cell.number_format = CURR
+            cell.fill = input_fill; cell.border = thin_border; cell.alignment = right_align
+        r += 1
+
+        # Shared Overhead Allocation
+        loc_sched['shared_overhead'] = r
+        ws.cell(row=r, column=2, value=f"  Shared OH ({loc_name})").font = data_font
+        shared_data = loc_pl.get('shared_overhead_allocation', [0.0] * N)
+        for i in range(N):
+            cell = ws.cell(row=r, column=3 + i, value=round(shared_data[i], 2))
+            cell.font = data_font; cell.number_format = CURR
+            cell.border = thin_border; cell.alignment = right_align
+        r += 1
+
+        r += 1  # blank between locations
+        asm['loc_schedules'][loc_name] = loc_sched
+
+    r += 1  # extra blank
+
+    # ================================================================
     # HISTORICAL AR SPILLOVER (formula-driven from historical table + curves)
     # Uses explicit term-by-term formulas (no SUMPRODUCT/INDEX) for
     # broad Excel compatibility.
@@ -2378,20 +2455,42 @@ def build_location_pl(wb, location_name, pl_data, asm):
     formulas = [f"={mcol(i)}{row_total_collected}*Assumptions!$C${asm['billing_rate']}/100" for i in range(N)]
     r = _write_formula_row(ws, r, "  Billing (18%)", formulas)
 
-    # Payroll, contractors, opex, expansion — hardcoded from py calculations
-    # (These could be made formula-driven too, but the team roster and opex
-    # structures are complex. Hardcoded values update on rebuild.)
+    # All overhead rows reference per-location schedules on Assumptions tab
+    loc_sched = asm.get('loc_schedules', {}).get(location_name, {})
+
     row_payroll = r
-    r = _write_row(ws, r, "  Payroll (W-2)", pl_data['payroll'])
+    if 'payroll' in loc_sched:
+        formulas = [f"=Assumptions!{mcol(i)}${loc_sched['payroll']}" for i in range(N)]
+        r = _write_formula_row(ws, r, "  Payroll (W-2)", formulas)
+    else:
+        r = _write_row(ws, r, "  Payroll (W-2)", pl_data['payroll'])
+
     row_contractors = r
-    r = _write_row(ws, r, "  Contractors", pl_data['contractors'])
+    if 'contractors' in loc_sched:
+        formulas = [f"=Assumptions!{mcol(i)}${loc_sched['contractors']}" for i in range(N)]
+        r = _write_formula_row(ws, r, "  Contractors", formulas)
+    else:
+        r = _write_row(ws, r, "  Contractors", pl_data['contractors'])
+
     row_opex = r
-    r = _write_row(ws, r, "  Operating Expenses", pl_data['direct_opex'])
+    if 'opex' in loc_sched:
+        formulas = [f"=Assumptions!{mcol(i)}${loc_sched['opex']}" for i in range(N)]
+        r = _write_formula_row(ws, r, "  Operating Expenses", formulas)
+    else:
+        r = _write_row(ws, r, "  Operating Expenses", pl_data['direct_opex'])
+
     row_expansion = r
-    r = _write_row(ws, r, "  Expansion Costs", pl_data.get('expansion_costs', [0]*N))
+    if 'expansion' in loc_sched:
+        formulas = [f"=Assumptions!{mcol(i)}${loc_sched['expansion']}" for i in range(N)]
+        r = _write_formula_row(ws, r, "  Expansion Costs", formulas)
+    else:
+        r = _write_row(ws, r, "  Expansion Costs", pl_data.get('expansion_costs', [0]*N))
 
     row_shared = r
-    if 'shared_overhead_allocation' in pl_data:
+    if 'shared_overhead' in loc_sched:
+        formulas = [f"=Assumptions!{mcol(i)}${loc_sched['shared_overhead']}" for i in range(N)]
+        r = _write_formula_row(ws, r, "  Shared Overhead (allocated)", formulas)
+    elif 'shared_overhead_allocation' in pl_data:
         r = _write_row(ws, r, "  Shared Overhead (allocated)", pl_data['shared_overhead_allocation'])
 
     # Total overhead (formula summing all components)
