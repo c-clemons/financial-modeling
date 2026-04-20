@@ -2196,6 +2196,89 @@ def _get_monthly_total_expenses_25():
 # ============================================================
 # MAIN
 # ============================================================
+def build_location_pl(wb, location_name, pl_data):
+    """Build a per-location P&L tab with hardcoded values from generate_pl_by_location()."""
+    tab_name = f"{location_name} P&L"
+    if len(tab_name) > 31:
+        tab_name = tab_name[:31]
+
+    ws = wb.create_sheet(tab_name)
+    ws.sheet_properties.tabColor = "7030A0" if location_name != "Westlake" else "4472C4"
+
+    ws.column_dimensions['A'].width = 3
+    ws.column_dimensions['B'].width = 35
+    for ci in range(3, 3 + N + 1):
+        ws.column_dimensions[get_column_letter(ci)].width = 11
+    ws.column_dimensions[get_column_letter(3 + N)].width = 14
+
+    # Title
+    ws.merge_cells(start_row=2, start_column=2, end_row=2, end_column=min(3 + N, 30))
+    ws.cell(row=2, column=2,
+            value=f"{location_name} \u2014 Monthly P&L (Cash Basis, 2026-2030)").font = title_font
+
+    r = 4
+    last_col = 3 + N
+
+    # Header
+    section_bar(ws, r, 2, last_col, f"{location_name.upper()} P&L")
+    r += 1
+    header_row(ws, r, ["Account"] + FORECAST_MONTH_LABELS + ["Total"], c1=2)
+    r += 1
+
+    # Surgery volumes
+    r = _write_row(ws, r, "Bobas Volume", pl_data['bobas_volume'], fmt='#,##0')
+    r = _write_row(ws, r, "GAP Volume", pl_data['gap_volume'], fmt='#,##0')
+    total_vol = [pl_data['bobas_volume'][i] + pl_data['gap_volume'][i] for i in range(N)]
+    r = _write_row(ws, r, "Total Surgeries", total_vol, bold=True, fmt='#,##0')
+    r += 1
+
+    # Revenue
+    ws.cell(row=r, column=2, value="REVENUE (Cash Collected)").font = subsection_font
+    r += 1
+    r = _write_row(ws, r, "  Bobas Collected", pl_data['bobas_collected'])
+    r = _write_row(ws, r, "  GAP Collected", pl_data['gap_collected'])
+    r = _write_row(ws, r, "TOTAL COLLECTIONS", pl_data['total_collected'], bold=True)
+    r += 1
+
+    # Overhead
+    ws.cell(row=r, column=2, value="DIRECT OVERHEAD").font = subsection_font
+    r += 1
+    r = _write_row(ws, r, "  Billing (18%)", pl_data['billing_fees'])
+    r = _write_row(ws, r, "  Payroll (W-2)", pl_data['payroll'])
+    r = _write_row(ws, r, "  Contractors", pl_data['contractors'])
+    r = _write_row(ws, r, "  Operating Expenses", pl_data['direct_opex'])
+    r = _write_row(ws, r, "  Expansion Costs", pl_data.get('expansion_costs', [0]*N))
+
+    if 'shared_overhead_allocation' in pl_data:
+        r = _write_row(ws, r, "  Shared Overhead (allocated)", pl_data['shared_overhead_allocation'])
+
+    r = _write_row(ws, r, "TOTAL OVERHEAD", pl_data['total_overhead'], bold=True)
+    r += 1
+
+    # Surgeon compensation
+    surgeon_pay = pl_data.get('surgeon_compensation', [0]*N)
+    if any(v != 0 for v in surgeon_pay):
+        surgeon_rate = pl_data.get('surgeon_rate', 0)
+        r = _write_row(ws, r, f"  Surgeon Compensation ({surgeon_rate:.0f}%)", surgeon_pay)
+        r += 1
+
+    # Contribution
+    ws.cell(row=r, column=2, value="CONTRIBUTION").font = subsection_font
+    r += 1
+    r = _write_row(ws, r, "CONTRIBUTION", pl_data['contribution'], bold=True)
+
+    # Style total rows
+    for row_idx in range(4, r):
+        label = ws.cell(row=row_idx, column=2).value
+        if label and ("TOTAL" in str(label) or "CONTRIBUTION" == str(label)):
+            style_range(ws, row_idx, 2, last_col, border=bottom_border)
+
+    # Freeze panes
+    ws.freeze_panes = "C7"
+
+    return ws
+
+
 def build_model(output_path: str = None):
     if output_path is None:
         output_path = "CNS Financial Model.xlsx"
@@ -2219,6 +2302,14 @@ def build_model(output_path: str = None):
 
     print("Building QBO Actuals...")
     build_qbo_actuals(wb)
+
+    print("Building Per-Location P&Ls...")
+    from financial_calcs import generate_pl_by_location
+    pl_by_loc = generate_pl_by_location(DEFAULT_ASSUMPTIONS)
+    for loc_name in DEFAULT_ASSUMPTIONS.get('locations', ['Westlake']):
+        if loc_name in pl_by_loc:
+            build_location_pl(wb, loc_name, pl_by_loc[loc_name])
+            print(f"  Built {loc_name} P&L")
 
     print("Building Case Analytics...")
     build_case_analytics(wb)
