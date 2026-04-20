@@ -65,14 +65,14 @@ AVG_REVENUE_PER_SURGERY = 2288432.70 / TOTAL_SURGERIES_2025  # ~$19,728
 # SURGERY VOLUME DEFAULTS - BOBAS & GAP (60 months)
 # ============================================================
 
-# Westlake volumes: Jan-Mar actuals [2,1,3], Apr-Dec forecast ramp 2→8, then flat 8
+# Westlake volumes: Jan-Mar actuals [2,1,3], ramp to 5 BOBA + 4 GAP
 _bobas_actuals = [2, 1, 3]  # Jan-Mar 2026 from client data
-_bobas_forecast_apr_dec = [2, 3, 4, 4, 5, 5, 6, 7, 8]  # Apr-Dec 2026
-_bobas_2027_2030 = [8] * 48
+_bobas_forecast_apr_dec = [2, 3, 3, 4, 4, 5, 5, 5, 5]  # Apr-Dec 2026, ramp to 5
+_bobas_2027_2030 = [5] * 48
 _WESTLAKE_BOBAS = _bobas_actuals + _bobas_forecast_apr_dec + _bobas_2027_2030
 
 _gap_actuals = [0, 1, 1]  # Jan-Mar 2026 from client data
-_gap_forecast_apr_dec = [1, 2, 2, 2, 3, 3, 3, 4, 4]  # Apr-Dec 2026
+_gap_forecast_apr_dec = [1, 2, 2, 2, 3, 3, 3, 4, 4]  # Apr-Dec 2026, ramp to 4
 _gap_2027_2030 = [4] * 48
 _WESTLAKE_GAP = _gap_actuals + _gap_forecast_apr_dec + _gap_2027_2030
 
@@ -87,8 +87,8 @@ GAP_VOLUME_DEFAULT = _WESTLAKE_GAP      # updated below
 LOCATIONS = ['Westlake', 'Santa Barbara']
 
 # Per-location volumes: Westlake keeps existing forecast, SB ramps after lease start (month 6)
-_sb_bobas = [0]*6 + [1, 1, 2, 2, 3, 4] + [4]*48   # starts Jul-26, ramps to 4 over 12mo
-_sb_gap = [0]*6 + [0, 1, 1, 1, 1, 2] + [2]*48       # starts Jul-26, ramps to 2
+_sb_bobas = [0]*6 + [2, 2, 3, 3, 3, 4] + [4]*48   # starts Jul-26 at 2, ramps to 4
+_sb_gap = [0]*6 + [2, 2, 2, 3, 3, 4] + [4]*48       # starts Jul-26 at 2, ramps to 4
 
 VOLUMES_BY_LOCATION = {
     'Westlake': {

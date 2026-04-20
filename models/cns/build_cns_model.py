@@ -315,26 +315,99 @@ def build_assumptions(wb):
     asm['hist_end'] = r - 1
     r += 1  # blank
 
-    # ---- SURGERY VOLUME (forecast, 60 months) ----
+    # ---- SURGERY VOLUME (per-location, laid out horizontally) ----
+    from baseline_data import LOCATIONS, VOLUMES_BY_LOCATION
+
+    locations = a.get('locations', LOCATIONS)
+    volumes_by_loc = a.get('volumes_by_location', VOLUMES_BY_LOCATION)
+    num_actuals = len(BOBA_2026_ACTUALS)  # 3 (Jan-Mar 2026)
+
+    # Consolidated volumes in C/D (used by P&L formulas)
+    # Plus per-location tables to the right
+    vol_section_row = r
     section_bar(ws, r, 2, 5, "SURGERY VOLUME (Monthly)")
+
+    # Per-location section headers
+    for loc_idx, loc_name in enumerate(locations):
+        col_start = 6 + loc_idx * 5  # F, K, P, U, Z...
+        loc_fill = PatternFill(start_color="7030A0" if loc_idx > 0 else ACCENT_BLUE,
+                                end_color="7030A0" if loc_idx > 0 else ACCENT_BLUE, fill_type="solid")
+        for c in range(col_start, col_start + 5):
+            ws.cell(row=r, column=c).fill = loc_fill
+        ws.cell(row=r, column=col_start,
+                value=f"SURGERY VOLUME (Monthly)").font = Font(
+                    name="Calibri", size=10, bold=True, color="FFFFFF")
     r += 1
+
+    # Sub-headers
+    ws.cell(row=r, column=2, value="").font = data_font  # blank for consolidated section header
+    ws.cell(row=r, column=3, value="Consolidated").font = Font(
+        name="Calibri", size=10, bold=True, color=NAVY)
+    for loc_idx, loc_name in enumerate(locations):
+        col_start = 6 + loc_idx * 5
+        ws.cell(row=r, column=col_start, value=loc_name).font = Font(
+            name="Calibri", size=10, bold=True, color=NAVY)
+    r += 1
+
+    # Column headers
     header_row(ws, r, ["Month", "Bobas", "GAP", "Source"], c1=2)
+    for loc_idx, loc_name in enumerate(locations):
+        col_start = 6 + loc_idx * 5
+        for ci, label in enumerate(["Month", "Bobas", "GAP", "Source"]):
+            cell = ws.cell(row=r, column=col_start + ci, value=label)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = center_align
+            cell.border = thin_border
     r += 1
     asm['vol_start'] = r
 
-    bobas_vol = a['bobas_volume']
+    # Per-location volume tracking for column references
+    asm['vol_by_location'] = {}
+
+    bobas_vol = a['bobas_volume']  # consolidated
     gap_vol = a['gap_volume']
-    num_actuals = len(BOBA_2026_ACTUALS)  # 3 (Jan-Mar 2026)
 
     for i in range(N):
+        # Consolidated (columns B-E)
         ws.cell(row=r, column=2, value=FORECAST_MONTH_LABELS[i]).font = data_font
-        input_cell(ws, r, 3, bobas_vol[i], '#,##0')  # Col C = Bobas
-        input_cell(ws, r, 4, gap_vol[i], '#,##0')     # Col D = GAP
+        input_cell(ws, r, 3, bobas_vol[i], '#,##0')  # Col C = Bobas consolidated
+        input_cell(ws, r, 4, gap_vol[i], '#,##0')     # Col D = GAP consolidated
         source = "Actual" if i < num_actuals else "Forecast"
         ws.cell(row=r, column=5, value=source).font = pct_font
+
+        # Per-location (columns F+)
+        for loc_idx, loc_name in enumerate(locations):
+            col_start = 6 + loc_idx * 5
+            loc_vols = volumes_by_loc.get(loc_name, {'bobas': [0]*N, 'gap': [0]*N})
+            loc_bobas = loc_vols['bobas'][i] if i < len(loc_vols['bobas']) else 0
+            loc_gap = loc_vols['gap'][i] if i < len(loc_vols['gap']) else 0
+
+            ws.cell(row=r, column=col_start, value=FORECAST_MONTH_LABELS[i]).font = data_font
+            input_cell(ws, r, col_start + 1, loc_bobas, '#,##0')
+            input_cell(ws, r, col_start + 2, loc_gap, '#,##0')
+            loc_source = "Actual" if i < num_actuals and loc_name == "Westlake" else "Forecast"
+            cell = ws.cell(row=r, column=col_start + 3, value=loc_source)
+            cell.font = pct_font
+
+            if i == 0:
+                asm['vol_by_location'][loc_name] = {
+                    'start_row': r,
+                    'bobas_col': col_start + 1,
+                    'gap_col': col_start + 2,
+                }
+
         r += 1
-    # r is now 67
-    r += 1  # blank row -> R68
+
+    # Set column widths for per-location sections
+    for loc_idx in range(len(locations)):
+        col_start = 6 + loc_idx * 5
+        ws.column_dimensions[get_column_letter(col_start)].width = 10      # Month
+        ws.column_dimensions[get_column_letter(col_start + 1)].width = 8   # Bobas
+        ws.column_dimensions[get_column_letter(col_start + 2)].width = 8   # GAP
+        ws.column_dimensions[get_column_letter(col_start + 3)].width = 9   # Source
+
+    r += 1  # blank row
 
     # ---- REVENUE ASSUMPTIONS (R68+) ----
     section_bar(ws, r, 2, 5, "REVENUE ASSUMPTIONS")
