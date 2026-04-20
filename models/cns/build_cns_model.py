@@ -654,9 +654,9 @@ def build_assumptions(wb):
             # Active if: start_month not blank, type=W-2, month >= start, (end blank OR month <= end)
             # Salary = base * (1 + raise%)^year_index
             f = (f'=IF(AND($D${person_row}<>"",$F${person_row}="W-2",'
-                 f'COLUMN()-3>=$D${person_row},'
-                 f'OR($E${person_row}="",COLUMN()-3<=$E${person_row})),'
-                 f'$C${person_row}*(1+$C${sal_rate_row}/100)^INT((COLUMN()-3)/12),0)')
+                 f'COLUMN()-2>=$D${person_row},'
+                 f'OR($E${person_row}="",COLUMN()-2<=$E${person_row})),'
+                 f'$C${person_row}*(1+$C${sal_rate_row}/100)^INT((COLUMN()-2)/12),0)')
             cell = ws.cell(row=r, column=3 + i, value=f)
             cell.font = data_font
             cell.number_format = CURR
@@ -732,9 +732,9 @@ def build_assumptions(wb):
         ws.cell(row=r, column=2, value=f"  {person['title']}").font = data_font
         for i in range(N):
             f = (f'=IF(AND($D${person_row}<>"",$F${person_row}="Contractor",'
-                 f'COLUMN()-3>=$D${person_row},'
-                 f'OR($E${person_row}="",COLUMN()-3<=$E${person_row})),'
-                 f'$C${person_row}*(1+$C${sal_rate_row}/100)^INT((COLUMN()-3)/12),0)')
+                 f'COLUMN()-2>=$D${person_row},'
+                 f'OR($E${person_row}="",COLUMN()-2<=$E${person_row})),'
+                 f'$C${person_row}*(1+$C${sal_rate_row}/100)^INT((COLUMN()-2)/12),0)')
             cell = ws.cell(row=r, column=3 + i, value=f)
             cell.font = data_font
             cell.number_format = CURR
@@ -773,7 +773,7 @@ def build_assumptions(wb):
         ws.cell(row=r, column=2, value=f"  {item_name}").font = data_font
         for i in range(N):
             # base_amount * (1 + inflation/100) ^ year_index
-            f = f'=$C${opex_row}*(1+$C${inf_rate_row}/100)^INT((COLUMN()-3)/12)'
+            f = f'=$C${opex_row}*(1+$C${inf_rate_row}/100)^INT((COLUMN()-2)/12)'
             cell = ws.cell(row=r, column=3 + i, value=f)
             cell.font = data_font
             cell.number_format = CURR
@@ -821,8 +821,8 @@ def build_assumptions(wb):
         ws.cell(row=r, column=2, value=f"    TI ({exp_name})").font = data_font
         for i in range(N):
             f = (f'=IF(AND($C${en}=1,$C${ti_dur}>0,'
-                 f'COLUMN()-3>=$C${ti_start},'
-                 f'COLUMN()-3<$C${ti_start}+$C${ti_dur}),'
+                 f'COLUMN()-2>=$C${ti_start},'
+                 f'COLUMN()-2<$C${ti_start}+$C${ti_dur}),'
                  f'$C${ti_share}/$C${ti_dur},0)')
             cell = ws.cell(row=r, column=3 + i, value=f)
             cell.font = data_font; cell.number_format = CURR
@@ -833,8 +833,8 @@ def build_assumptions(wb):
         row_lease = r
         ws.cell(row=r, column=2, value=f"    Lease ({exp_name})").font = data_font
         for i in range(N):
-            f = (f'=IF(AND($C${en}=1,COLUMN()-3>=$C${lease_st}),'
-                 f'$C${lease_mo}*(1+$C${inf_rate_row}/100)^INT((COLUMN()-3)/12),0)')
+            f = (f'=IF(AND($C${en}=1,COLUMN()-2>=$C${lease_st}),'
+                 f'$C${lease_mo}*(1+$C${inf_rate_row}/100)^INT((COLUMN()-2)/12),0)')
             cell = ws.cell(row=r, column=3 + i, value=f)
             cell.font = data_font; cell.number_format = CURR
             cell.border = thin_border; cell.alignment = right_align
@@ -844,7 +844,7 @@ def build_assumptions(wb):
         row_ffe = r
         ws.cell(row=r, column=2, value=f"    FF&E ({exp_name})").font = data_font
         for i in range(N):
-            f = f'=IF(AND($C${en}=1,COLUMN()-3=$C${lease_st}),$C${ffe},0)'
+            f = f'=IF(AND($C${en}=1,COLUMN()-2=$C${lease_st}),$C${ffe},0)'
             cell = ws.cell(row=r, column=3 + i, value=f)
             cell.font = data_font; cell.number_format = CURR
             cell.border = thin_border; cell.alignment = right_align
@@ -858,13 +858,13 @@ def build_assumptions(wb):
         for i in range(N):
             if ramp_mo and ramp_months:
                 # Ramp: use reduced rate for first N months, then full rate
-                f = (f'=IF(AND($C${en}=1,COLUMN()-3>=$C${lease_st}),'
-                     f'IF(COLUMN()-3<$C${lease_st}+$C${ramp_months},'
-                     f'$C${ramp_mo}*(1+$C${inf_rate_row}/100)^INT((COLUMN()-3)/12),'
-                     f'$C${exp_opex}*(1+$C${inf_rate_row}/100)^INT((COLUMN()-3)/12)),0)')
+                f = (f'=IF(AND($C${en}=1,COLUMN()-2>=$C${lease_st}),'
+                     f'IF(COLUMN()-2<$C${lease_st}+$C${ramp_months},'
+                     f'$C${ramp_mo}*(1+$C${inf_rate_row}/100)^INT((COLUMN()-2)/12),'
+                     f'$C${exp_opex}*(1+$C${inf_rate_row}/100)^INT((COLUMN()-2)/12)),0)')
             else:
-                f = (f'=IF(AND($C${en}=1,COLUMN()-3>=$C${lease_st}),'
-                     f'$C${exp_opex}*(1+$C${inf_rate_row}/100)^INT((COLUMN()-3)/12),0)')
+                f = (f'=IF(AND($C${en}=1,COLUMN()-2>=$C${lease_st}),'
+                     f'$C${exp_opex}*(1+$C${inf_rate_row}/100)^INT((COLUMN()-2)/12),0)')
             cell = ws.cell(row=r, column=3 + i, value=f)
             cell.font = data_font; cell.number_format = CURR
             cell.border = thin_border; cell.alignment = right_align

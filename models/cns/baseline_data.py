@@ -141,12 +141,12 @@ SHARED_OVERHEAD = {
 
 
 # Collection curves (values as percentages, must sum to 100)
-# Data-driven from actual paid cases:
-#   BOBA: 12 paid cases. Actual $-weighted: M+2=2.5%, M+5=27%, M+6=10%, M+7=32%, M+8=27%, M+10=0.3%
-#   Smoothed/normalized to sum to 100:
-BOBAS_COLLECTION_CURVE = [0, 0, 3, 0, 0, 27, 10, 32, 23, 0, 5, 0]  # 12 elements
-#   GAP: 3 paid cases. $-weighted: M+1=65%, M+4=35%. Extended with small M+2/M+3 buffer:
-GAP_COLLECTION_CURVE = [0, 55, 10, 10, 25]  # 5 elements
+# BOBA: 15-month curve, normally distributed peaking at M+8
+# Based on actual data showing 5-10 month collection lag for complex cases.
+BOBAS_COLLECTION_CURVE = [0, 0, 1, 2, 5, 8, 12, 15, 16, 15, 12, 8, 4, 1, 1]  # 15 elements, sum=100
+# GAP: 8-month curve, Poisson-distributed, bulk at M+1 and M+2
+# Based on actual data showing faster collection for simpler GAP cases.
+GAP_COLLECTION_CURVE = [3, 42, 31, 16, 6, 1, 1, 0]  # 8 elements, sum=100
 
 
 # ============================================================
@@ -276,7 +276,8 @@ BALANCE_SHEET_2025 = {
 # ============================================================
 
 # 15 team slots: first 4 are existing, rest are open for new hires.
-# start_month: 0-indexed into 60-month forecast (0=Jan-26, 6=Jul-26, etc.)
+# start_month: 1-indexed into 60-month forecast (1=Jan-26, 7=Jul-26, etc.)
+# Array indexing in financial_calcs.py subtracts 1 internally.
 #              None means slot is empty / not hired yet.
 # end_month: None means active through end of forecast.
 TEAM_ROSTER = [
@@ -285,7 +286,7 @@ TEAM_ROSTER = [
         'title': 'Herlyn',
         'monthly_salary': 11000,
         'employment_type': 'W-2',
-        'start_month': 0,       # Jan 2026
+        'start_month': 1,       # Jan 2026
         'end_month': None,
         'location': 'Westlake',
         'notes': 'W-2 employee, $11K/mo',
@@ -294,7 +295,7 @@ TEAM_ROSTER = [
         'title': 'Christina',
         'monthly_salary': 10000,
         'employment_type': 'W-2',
-        'start_month': 0,       # Jan 2026
+        'start_month': 1,       # Jan 2026
         'end_month': None,
         'location': 'Westlake',
         'notes': 'W-2 employee, $10K/mo',
@@ -303,8 +304,8 @@ TEAM_ROSTER = [
         'title': 'Front Desk (FT)',
         'monthly_salary': 6400,
         'employment_type': 'W-2',
-        'start_month': 0,       # Jan 2026
-        'end_month': 2,         # Last day March 20, 2026
+        'start_month': 1,       # Jan 2026
+        'end_month': 3,         # Last day March 20, 2026
         'partial_last_month': 20 / 31,
         'location': 'Westlake',
         'notes': 'W-2 employee, 40hr/wk. Last day 3/20/2026.',
@@ -313,7 +314,7 @@ TEAM_ROSTER = [
         'title': 'Virtual Assistant',
         'monthly_salary': 4000,
         'employment_type': 'Contractor',
-        'start_month': 0,
+        'start_month': 1,
         'end_month': None,
         'location': 'Westlake',
         'notes': 'Via NMed Consulting agency (Philippines) - $16/hour',
@@ -323,7 +324,7 @@ TEAM_ROSTER = [
         'title': 'SB Office Manager',
         'monthly_salary': 5200,
         'employment_type': 'W-2',
-        'start_month': 6,       # Jul 2026 (lease start)
+        'start_month': 7,       # Jul 2026 (lease start)
         'end_month': None,
         'location': 'Santa Barbara',
         'notes': 'Santa Barbara office manager',
@@ -465,29 +466,29 @@ DEFAULT_ASSUMPTIONS = {
         {
             'name': 'Santa Barbara',
             'enabled': True,
-            'lease_start_month': 6,     # Jul 2026 (0-indexed into 60-mo forecast)
+            'lease_start_month': 7,     # Jul 2026 (1-indexed: 1=Jan-26)
             'lease_monthly': 7500,
             'ti_total': 200000,
             'ti_cns_share': 100000,
-            'ti_start_month': 4,        # May 2026
+            'ti_start_month': 5,        # May 2026
             'ti_duration_months': 2,
             'ffe_budget': 15000,
             'opex_monthly': 40000,       # full run-rate after ramp
             'opex_ramp_monthly': 15000,  # first 6 months at reduced rate
             'opex_ramp_months': 6,       # months at ramp rate before full
         },
-        {'name': 'Expansion 2', 'enabled': False, 'lease_start_month': 18,
+        {'name': 'Expansion 2', 'enabled': False, 'lease_start_month': 19,
          'lease_monthly': 0, 'ti_total': 0, 'ti_cns_share': 0,
-         'ti_start_month': 16, 'ti_duration_months': 2, 'ffe_budget': 0, 'opex_monthly': 0},
-        {'name': 'Expansion 3', 'enabled': False, 'lease_start_month': 20,
+         'ti_start_month': 17, 'ti_duration_months': 2, 'ffe_budget': 0, 'opex_monthly': 0},
+        {'name': 'Expansion 3', 'enabled': False, 'lease_start_month': 21,
          'lease_monthly': 0, 'ti_total': 0, 'ti_cns_share': 0,
-         'ti_start_month': 18, 'ti_duration_months': 2, 'ffe_budget': 0, 'opex_monthly': 0},
-        {'name': 'Expansion 4', 'enabled': False, 'lease_start_month': 22,
-         'lease_monthly': 0, 'ti_total': 0, 'ti_cns_share': 0,
-         'ti_start_month': 20, 'ti_duration_months': 2, 'ffe_budget': 0, 'opex_monthly': 0},
-        {'name': 'Expansion 5', 'enabled': False, 'lease_start_month': 23,
+         'ti_start_month': 19, 'ti_duration_months': 2, 'ffe_budget': 0, 'opex_monthly': 0},
+        {'name': 'Expansion 4', 'enabled': False, 'lease_start_month': 23,
          'lease_monthly': 0, 'ti_total': 0, 'ti_cns_share': 0,
          'ti_start_month': 21, 'ti_duration_months': 2, 'ffe_budget': 0, 'opex_monthly': 0},
+        {'name': 'Expansion 5', 'enabled': False, 'lease_start_month': 24,
+         'lease_monthly': 0, 'ti_total': 0, 'ti_cns_share': 0,
+         'ti_start_month': 22, 'ti_duration_months': 2, 'ffe_budget': 0, 'opex_monthly': 0},
     ],
 }
 

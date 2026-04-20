@@ -100,13 +100,16 @@ def forecast_payroll(
             start = person.get('start_month')
             if start is None:
                 continue
+            # Convert 1-based month to 0-based array index
+            start_idx = start - 1
             end = person.get('end_month', None)
-            if month < start:
+            end_idx = (end - 1) if end is not None else None
+            if month < start_idx:
                 continue
-            if end is not None and month > end:
+            if end_idx is not None and month > end_idx:
                 continue
             base_salary = person['monthly_salary'] * escalator
-            if end is not None and month == end:
+            if end_idx is not None and month == end_idx:
                 partial = person.get('partial_last_month', 1.0)
                 base_salary = base_salary * partial
 
@@ -173,34 +176,41 @@ def forecast_expansion_costs(assumptions: Dict) -> Dict:
             continue
 
         # TI (one-time capital, no inflation)
-        ti_start = exp.get('ti_start_month', 0)
+        # Convert 1-based months to 0-based array indices
+        ti_start = exp.get('ti_start_month', 1) - 1
         ti_dur = exp.get('ti_duration_months', 2)
         ti_amount = exp.get('ti_cns_share', 0)
         if ti_dur > 0 and ti_amount > 0:
             per_month = ti_amount / ti_dur
-            for m in range(ti_start, min(ti_start + ti_dur, N)):
+            for m in range(max(0, ti_start), min(ti_start + ti_dur, N)):
                 d['ti'][m] = per_month
 
         # Lease (with inflation)
-        lease_start = exp.get('lease_start_month', 0)
+        lease_start = exp.get('lease_start_month', 1) - 1
         lease_amt = exp.get('lease_monthly', 0)
-        for m in range(lease_start, N):
+        for m in range(max(0, lease_start), N):
             escalator = (1 + inflation_rate) ** (m // 12)
             d['lease'][m] = lease_amt * escalator
 
         # FF&E (one-time, no inflation)
         ffe = exp.get('ffe_budget', 0)
-        if lease_start < N and ffe > 0:
+        if 0 <= lease_start < N and ffe > 0:
             d['ffe'][lease_start] = ffe
 
-        # Ongoing opex (with inflation)
-        sb_opex = exp.get('opex_monthly', 0)
-        for m in range(lease_start, N):
+        # Ongoing opex (with inflation and optional ramp)
+        opex_full = exp.get('opex_monthly', 0)
+        opex_ramp = exp.get('opex_ramp_monthly', opex_full)
+        ramp_months = exp.get('opex_ramp_months', 0)
+        for m in range(max(0, lease_start), N):
             escalator = (1 + inflation_rate) ** (m // 12)
-            d['opex'][m] = sb_opex * escalator
+            months_since_start = m - lease_start
+            if ramp_months > 0 and months_since_start < ramp_months:
+                d['opex'][m] = opex_ramp * escalator
+            else:
+                d['opex'][m] = opex_full * escalator
 
         # Location count
-        for m in range(lease_start, N):
+        for m in range(max(0, lease_start), N):
             locations_open[m] += 1
 
         d['total'] = [d['ti'][i] + d['lease'][i] + d['ffe'][i] + d['opex'][i] for i in range(N)]
