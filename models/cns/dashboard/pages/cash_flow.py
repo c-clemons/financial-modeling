@@ -41,19 +41,32 @@ def show():
                 assumptions[key] = assumptions[key] * (1 + opex_adj)
     assumptions['physician_services_rate'] = phys_rate
 
+    # Location toggle
+    from financial_calcs import generate_cash_flow_forecast, generate_monthly_pl_forecast, generate_pl_by_location
+    locations = ds.get_locations()
+    selected_view = st.selectbox("View", ["Consolidated"] + locations, key="cf_view")
+
     # Run forecast
-    from financial_calcs import generate_cash_flow_forecast, generate_monthly_pl_forecast
-    pl = generate_monthly_pl_forecast(assumptions)
+    pl_by_loc = generate_pl_by_location(assumptions)
     cf = generate_cash_flow_forecast(assumptions)
+
+    if selected_view == "Consolidated":
+        pl = pl_by_loc['consolidated']
+    else:
+        pl = pl_by_loc[selected_view]
 
     # Overlay Jan/Feb actuals
     qbo = ds.actuals_2026
     n_act = ds.n_actuals_2026
 
-    # --- KPIs ---
+    # --- KPIs (always consolidated for cash management) ---
     ending_cash = cf['ending_cash']
     savings = cf['savings_balance']
     physician = cf['physician']
+
+    # For chart: use selected view's revenue/overhead
+    chart_collected = pl.get('total_income', pl.get('total_collected', [0]*60))
+    chart_overhead = pl.get('total_overhead', [0]*60)
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -74,18 +87,18 @@ def show():
     labels = FORECAST_MONTH_LABELS
     display_labels = labels[:36]
 
-    # Cash available = cash collected - overhead (what's left to distribute/save/invest)
-    cash_available = [cf['cash_in'][i] - cf['cash_overhead'][i] for i in range(36)]
+    # Cash available = collected - overhead
+    cash_available = [chart_collected[i] - chart_overhead[i] for i in range(min(36, len(chart_collected)))]
 
     fig = go.Figure()
 
     fig.add_trace(go.Bar(
-        x=display_labels, y=cf['cash_in'][:36],
+        x=display_labels, y=chart_collected[:36],
         name="Cash Collected", marker_color="#2ecc71", opacity=0.85,
     ))
 
     fig.add_trace(go.Bar(
-        x=display_labels, y=[-v for v in cf['cash_overhead'][:36]],
+        x=display_labels, y=[-v for v in chart_overhead[:36]],
         name="Overhead (Cash Out)", marker_color="#e74c3c", opacity=0.85,
     ))
 

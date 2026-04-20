@@ -203,9 +203,32 @@ def show():
                 styles.append(s)
             return styles
 
+        volume_rows = {"Bobas Volume", "GAP Volume", "Total Surgeries"}
+
+        def _fmt(val):
+            if not isinstance(val, (int, float)):
+                return ""
+            return f"${val:,.0f}"
+
+        def _fmt_row_aware(row):
+            """Format each cell based on its row name."""
+            result = []
+            is_volume = row.name in volume_rows
+            for val in row:
+                if not isinstance(val, (int, float)):
+                    result.append("")
+                elif is_volume:
+                    result.append(f"{int(val):,}")
+                else:
+                    result.append(f"${val:,.0f}")
+            return result
+
+        # Convert to string DataFrame for display
+        display_df = df.apply(_fmt_row_aware, axis=1, result_type="broadcast")
+
         st.dataframe(
-            df.style.apply(_style, axis=1).format(
-                lambda x: f"${x:,.0f}" if isinstance(x, (int, float)) else "",
+            display_df.style.apply(_style, axis=1).format(
+                lambda x: x,  # already formatted as strings
                 na_rep="",
             ),
             use_container_width=True, height=700,
