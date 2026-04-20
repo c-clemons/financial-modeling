@@ -84,9 +84,9 @@ GAP_VOLUME_DEFAULT = _WESTLAKE_GAP      # updated below
 # MULTI-LOCATION SUPPORT
 # ============================================================
 
-LOCATIONS = ['Westlake', 'Santa Barbara']
+LOCATIONS = ['Westlake', 'Santa Barbara', 'Expansion 2', 'Expansion 3', 'Expansion 4', 'Expansion 5']
 
-# Per-location volumes: Westlake keeps existing forecast, SB ramps after lease start (month 6)
+# Per-location volumes
 _sb_bobas = [0]*6 + [2, 2, 3, 3, 3, 4] + [4]*48   # starts Jul-26 at 2, ramps to 4
 _sb_gap = [0]*6 + [2, 2, 2, 3, 3, 4] + [4]*48       # starts Jul-26 at 2, ramps to 4
 
@@ -99,6 +99,10 @@ VOLUMES_BY_LOCATION = {
         'bobas': _sb_bobas,
         'gap': _sb_gap,
     },
+    'Expansion 2': {'bobas': [0]*NUM_FORECAST_MONTHS, 'gap': [0]*NUM_FORECAST_MONTHS},
+    'Expansion 3': {'bobas': [0]*NUM_FORECAST_MONTHS, 'gap': [0]*NUM_FORECAST_MONTHS},
+    'Expansion 4': {'bobas': [0]*NUM_FORECAST_MONTHS, 'gap': [0]*NUM_FORECAST_MONTHS},
+    'Expansion 5': {'bobas': [0]*NUM_FORECAST_MONTHS, 'gap': [0]*NUM_FORECAST_MONTHS},
 }
 
 # Consolidated volumes (sum across all locations) — backwards compatible
@@ -115,10 +119,14 @@ OPEX_BY_LOCATION = {
     },
     'Santa Barbara': {
         'marketing_monthly': 3000.00,
-        'rent_monthly': 7500.00,      # from expansion config
+        'rent_monthly': 7500.00,
         'contracts_monthly': 3000.00,
         'office_software_monthly': 2000.00,
     },
+    'Expansion 2': {'marketing_monthly': 0, 'rent_monthly': 0, 'contracts_monthly': 0, 'office_software_monthly': 0},
+    'Expansion 3': {'marketing_monthly': 0, 'rent_monthly': 0, 'contracts_monthly': 0, 'office_software_monthly': 0},
+    'Expansion 4': {'marketing_monthly': 0, 'rent_monthly': 0, 'contracts_monthly': 0, 'office_software_monthly': 0},
+    'Expansion 5': {'marketing_monthly': 0, 'rent_monthly': 0, 'contracts_monthly': 0, 'office_software_monthly': 0},
 }
 
 # Shared overhead (allocated by revenue % across locations)
