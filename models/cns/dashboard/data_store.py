@@ -17,6 +17,8 @@ from baseline_data import (
     HISTORICAL_AR_BOBA, HISTORICAL_AR_GAP, HISTORICAL_AR_TOTAL,
     FORECAST_MONTH_LABELS, NUM_FORECAST_MONTHS,
     BALANCE_SHEET_2025,
+    BOBA_VOLUME_2024, GAP_VOLUME_2024,
+    BOBA_VOLUME_2025, GAP_VOLUME_2025,
 )
 from financial_calcs import (
     generate_monthly_pl_forecast,
@@ -43,14 +45,20 @@ class DataStore:
             cls._instance = cls()
         return cls._instance
 
+    HISTORICAL_DEFAULTS = {
+        'boba_2024': list(BOBA_VOLUME_2024),
+        'gap_2024': list(GAP_VOLUME_2024),
+        'boba_2025': list(BOBA_VOLUME_2025),
+        'gap_2025': list(GAP_VOLUME_2025),
+    }
+
     def __init__(self):
         self.defaults = copy.deepcopy(DEFAULT_ASSUMPTIONS)
         self.overrides = {}
         self.merged = {}
-        self.actuals_2025 = ACTUALS_2025
-        self.actuals_2025_totals = ACTUALS_2025_TOTALS
-        self.actuals_2026 = ACTUALS_2026_QBO
-        self.n_actuals_2026 = NUM_2026_ACTUALS
+        self._baseline_actuals_2025 = copy.deepcopy(ACTUALS_2025)
+        self._baseline_actuals_2025_totals = copy.deepcopy(ACTUALS_2025_TOTALS)
+        self._baseline_actuals_2026 = copy.deepcopy(ACTUALS_2026_QBO)
         self.team_roster = copy.deepcopy(TEAM_ROSTER)
         self.balance_sheet_2025 = BALANCE_SHEET_2025
         self.historical_ar = HISTORICAL_AR_TOTAL
@@ -60,6 +68,82 @@ class DataStore:
         self.overrides = self._load_json(DATA_DIR / "user_overrides.json")
         self.merged = self._deep_merge(self.defaults, self.overrides)
         self._loaded = True
+
+    # ------------------------------------------------------------------
+    # Actuals (with upload support)
+    # ------------------------------------------------------------------
+    @property
+    def actuals_2025(self) -> dict:
+        uploads = self.overrides.get("actuals_uploads", {}).get("2025")
+        if not uploads:
+            return self._baseline_actuals_2025
+        merged = copy.deepcopy(self._baseline_actuals_2025)
+        for k, v in uploads.get("data", {}).items():
+            merged[k] = list(v)
+        return merged
+
+    @property
+    def actuals_2025_totals(self) -> dict:
+        uploads = self.overrides.get("actuals_uploads", {}).get("2025")
+        if not uploads:
+            return self._baseline_actuals_2025_totals
+        merged = copy.deepcopy(self._baseline_actuals_2025_totals)
+        merged.update(uploads.get("totals", {}))
+        return merged
+
+    @property
+    def actuals_2026(self) -> dict:
+        uploads = self.overrides.get("actuals_uploads", {}).get("2026")
+        if not uploads:
+            return self._baseline_actuals_2026
+        merged = copy.deepcopy(self._baseline_actuals_2026)
+        # Replace months and per-key arrays for the uploaded range
+        merged["months"] = list(uploads.get("months", merged.get("months", [])))
+        for k, v in uploads.get("data", {}).items():
+            merged[k] = list(v)
+        for k, v in uploads.get("totals", {}).items():
+            merged[k] = list(v) if isinstance(v, list) else v
+        return merged
+
+    @property
+    def n_actuals_2026(self) -> int:
+        uploads = self.overrides.get("actuals_uploads", {}).get("2026")
+        if uploads and uploads.get("months"):
+            return len(uploads["months"])
+        return NUM_2026_ACTUALS
+
+    def set_uploaded_actuals(self, year: int, payload: dict):
+        """Persist a parsed P&L upload as actuals for the given year.
+
+        payload shape:
+            {'months': [...], 'data': {key: [vals]}, 'totals': {key: [vals]},
+             'source_filename': str, 'uploaded_at': iso-str}
+        """
+        uploads = self.overrides.setdefault("actuals_uploads", {})
+        uploads[str(year)] = payload
+        self.merged = self._deep_merge(self.defaults, self.overrides)
+        self.save_overrides()
+
+    def clear_uploaded_actuals(self, year: int):
+        uploads = self.overrides.get("actuals_uploads", {})
+        if str(year) in uploads:
+            del uploads[str(year)]
+            self.merged = self._deep_merge(self.defaults, self.overrides)
+            self.save_overrides()
+
+    def get_uploaded_actuals_meta(self, year: int) -> dict:
+        return self.overrides.get("actuals_uploads", {}).get(str(year), {})
+
+    # ------------------------------------------------------------------
+    # Account mapping (for unknown QBO accounts on upload)
+    # ------------------------------------------------------------------
+    def get_account_mapping_extras(self) -> dict:
+        return dict(self.overrides.get("account_mapping_extras", {}))
+
+    def add_account_mapping(self, qbo_label: str, target_key: str):
+        extras = self.overrides.setdefault("account_mapping_extras", {})
+        extras[qbo_label] = target_key
+        self.save_overrides()
 
     # ------------------------------------------------------------------
     # Assumptions
@@ -89,6 +173,29 @@ class DataStore:
         self.overrides['bobas_volume'] = bobas
         self.overrides['gap_volume'] = gap
         self.merged = self._deep_merge(self.defaults, self.overrides)
+        self.save_overrides()
+
+    # ------------------------------------------------------------------
+    # Historical surgery volumes (display context for prior years)
+    # ------------------------------------------------------------------
+    def get_historical_volumes(self, key: str) -> list:
+        store = self.overrides.get('historical_volumes', {})
+        if key in store:
+            return list(store[key])
+        return list(self.HISTORICAL_DEFAULTS[key])
+
+    def set_historical_volumes(self, **updates):
+        store = self.overrides.setdefault('historical_volumes', {})
+        for k, v in updates.items():
+            if k not in self.HISTORICAL_DEFAULTS:
+                raise KeyError(f"Unknown historical volume key: {k}")
+            expected_len = len(self.HISTORICAL_DEFAULTS[k])
+            arr = [int(x or 0) for x in (v or [])]
+            if len(arr) != expected_len:
+                raise ValueError(
+                    f"Historical {k} must have {expected_len} values, got {len(arr)}"
+                )
+            store[k] = arr
         self.save_overrides()
 
     # ------------------------------------------------------------------

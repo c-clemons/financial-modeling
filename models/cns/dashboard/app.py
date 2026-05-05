@@ -24,11 +24,14 @@ st.set_page_config(
 )
 
 from dashboard.data_store import DataStore
+from baseline_data import FORECAST_MONTH_LABELS
 
 PAGES = {
+    "CEO Dashboard": "dashboard.pages.ceo_dashboard",
     "Cash Flow Forecast": "dashboard.pages.cash_flow",
     "Monthly P&L": "dashboard.pages.monthly_pl",
     "Surgery Volumes": "dashboard.pages.surgery_volumes",
+    "Upload Actuals": "dashboard.pages.upload_actuals",
     "Assumptions": "dashboard.pages.assumptions",
     "Expansion Planner": "dashboard.pages.expansions",
     "Scenarios": "dashboard.pages.scenarios",
@@ -85,8 +88,14 @@ def main():
     page = st.sidebar.radio("Navigate", list(PAGES.keys()), label_visibility="collapsed")
 
     st.sidebar.divider()
-    st.sidebar.markdown(f"**Actuals:** Jan-Feb 2026")
-    st.sidebar.markdown(f"**Forecast:** Mar 2026 - Dec 2030")
+    actuals_2026 = ds.actuals_2026
+    months = actuals_2026.get("months", [])
+    if months:
+        st.sidebar.markdown(f"**Actuals:** {months[0]} - {months[-1]}")
+    n_act = ds.n_actuals_2026
+    forecast_start = (FORECAST_MONTH_LABELS[n_act]
+                       if n_act < len(FORECAST_MONTH_LABELS) else "—")
+    st.sidebar.markdown(f"**Forecast:** {forecast_start} - Dec 2030")
 
     a = ds.get_assumptions()
     st.sidebar.divider()
