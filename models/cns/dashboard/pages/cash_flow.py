@@ -15,7 +15,17 @@ from dashboard.constants import (
 def show():
     ds = DataStore.get()
     st.header("Cash Flow Forecast")
-    st.caption(f"60-month projection | Actuals: Jan-Feb 2026 | Forecast: Mar 2026 - Dec 2030")
+    qbo_months = ds.actuals_2026.get("months", [])
+    n_act_header = ds.n_actuals_2026
+    if qbo_months and n_act_header < len(FORECAST_MONTH_LABELS):
+        actuals_range = f"{qbo_months[0]} - {qbo_months[-1]}"
+        forecast_start = FORECAST_MONTH_LABELS[n_act_header]
+        st.caption(
+            f"60-month projection | Actuals: {actuals_range} | "
+            f"Forecast: {forecast_start} - Dec 2030"
+        )
+    else:
+        st.caption("60-month projection | Forecast: Jan 2026 - Dec 2030")
 
     # Sensitivity
     with st.expander("Sensitivity Adjustments", expanded=False):
@@ -144,6 +154,29 @@ def show():
     summary_rows = ["Cash After Overhead", "Ending Cash", "Savings Balance",
                      "Distributable"]
 
+    # Actual months get an amber tint; forecast months stay default. The
+    # range matches what's been committed via the Upload Actuals page —
+    # ``n_act`` reflects the P&L upload, and ending_cash for those months
+    # is anchored to the balance-sheet upload (see generate_cash_flow_forecast).
+    actual_cols_in_view = labels[:min(n_act, show_months)]
+    actual_col_set = set(actual_cols_in_view)
+
+    if actual_cols_in_view:
+        first_forecast = (labels[n_act]
+                          if n_act < len(labels) and n_act < show_months
+                          else None)
+        if first_forecast:
+            st.caption(
+                f"📊 **Actuals** (Jan-26 → {actual_cols_in_view[-1]}, "
+                f"amber-tinted) from QBO P&L + Balance Sheet uploads. "
+                f"**Forecast** ({first_forecast} onward) is model output."
+            )
+        else:
+            st.caption(
+                f"📊 **Actuals** (Jan-26 → {actual_cols_in_view[-1]}, "
+                "amber-tinted) from QBO P&L + Balance Sheet uploads."
+            )
+
     def _style(row):
         styles = []
         is_bold = any(s in str(row.name) for s in ["Ending", "After Overhead", "Distributable", "Savings Balance"])
@@ -154,10 +187,26 @@ def show():
             styles.append(s)
         return styles
 
-    st.dataframe(
-        df.style.apply(_style, axis=1).format("${:,.0f}"),
-        use_container_width=True, height=400,
-    )
+    def _shade_actuals(col):
+        if col.name in actual_col_set:
+            return ['background-color: #fff8e1'] * len(col)
+        return [''] * len(col)
+
+    styler = df.style.apply(_style, axis=1).apply(_shade_actuals, axis=0).format("${:,.0f}")
+    if actual_cols_in_view:
+        header_styles = [
+            {
+                'selector': f'th.col_heading.level0.col{i}',
+                'props': [
+                    ('background-color', '#fff3c4'),
+                    ('font-weight', '600'),
+                ],
+            }
+            for i in range(len(actual_cols_in_view))
+        ]
+        styler = styler.set_table_styles(header_styles, overwrite=False)
+
+    st.dataframe(styler, use_container_width=True, height=400)
 
     # Download
     csv = df.to_csv()
