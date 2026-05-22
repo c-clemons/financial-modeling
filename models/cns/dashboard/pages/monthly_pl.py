@@ -14,10 +14,10 @@ def show():
     ds = DataStore.get()
     st.header("Monthly P&L")
 
-    tab_2025, tab_forecast = st.tabs(["2025 Actuals", "2026-2030 Forecast"])
+    tab_forecast, tab_2025 = st.tabs(["2026-2030 Forecast", "2025 Actuals"])
 
     # =====================================================================
-    # TAB 1: 2025 Actuals
+    # 2025 Actuals (secondary tab)
     # =====================================================================
     with tab_2025:
         st.subheader("2025 Actuals (from QBO)")
@@ -71,7 +71,7 @@ def show():
             st.metric("FY 2025 Net Income", fmt_currency(t['net_income']))
 
     # =====================================================================
-    # TAB 2: 2026-2030 Forecast
+    # 2026-2030 Forecast (default tab)
     # =====================================================================
     with tab_forecast:
         st.subheader("2026-2030 Forecast (Cash Basis)")
@@ -224,7 +224,41 @@ def show():
         display_df = pd.DataFrame(display_data, index=df.index)
         display_df.index.name = "Line Item"
 
-        st.dataframe(display_df, use_container_width=True, height=700)
+        # Visually differentiate actual vs forecast columns. The first
+        # ``n_act`` months are committed actuals; the rest are model output.
+        actual_col_set = set(labels[:n_act]) if n_act > 0 else set()
+        first_forecast = labels[n_act] if 0 < n_act < len(labels) else None
+
+        if n_act > 0:
+            st.caption(
+                f"📊 **Actuals** (Jan-26 → {labels[n_act - 1]}, amber-tinted) "
+                f"replaced from QBO upload. **Forecast** "
+                f"({first_forecast or labels[0]} onward) is model output."
+                if first_forecast
+                else f"📊 **Actuals** (Jan-26 → {labels[n_act - 1]}, amber-tinted) "
+                     "replaced from QBO upload."
+            )
+
+        def _shade_actuals(col):
+            if col.name in actual_col_set:
+                return ['background-color: #fff8e1'] * len(col)
+            return [''] * len(col)
+
+        styler = display_df.style.apply(_shade_actuals, axis=0)
+        if n_act > 0:
+            header_styles = [
+                {
+                    'selector': f'th.col_heading.level0.col{i}',
+                    'props': [
+                        ('background-color', '#fff3c4'),
+                        ('font-weight', '600'),
+                    ],
+                }
+                for i in range(n_act)
+            ]
+            styler = styler.set_table_styles(header_styles, overwrite=False)
+
+        st.dataframe(styler, use_container_width=True, height=700)
 
         # Year summaries
         st.subheader("Annual Summary")

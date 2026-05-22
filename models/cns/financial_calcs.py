@@ -548,6 +548,7 @@ def generate_cash_flow_forecast(
 
     starting_cash = a.get('starting_cash', 274202.75)
     min_cash = a.get('minimum_cash_balance', 50000.0)
+    cash_actuals = a.get('cash_balance_actuals_by_index', {}) or {}
     physician_rate = a.get('physician_services_rate', 90) / 100.0
     savings_rate = a.get('savings_rate', 10) / 100.0
     billing_rate = a.get('billing_fee_rate', 18) / 100.0
@@ -616,7 +617,10 @@ def generate_cash_flow_forecast(
         distributable[i] = max(0, cash_after_overhead[i] - min_cash)
         physician[i] = distributable[i] * physician_rate
         savings_deposit[i] = distributable[i] * savings_rate
-        ending_cash[i] = cash_after_overhead[i] - physician[i] - savings_deposit[i]
+        if i in cash_actuals:
+            ending_cash[i] = cash_actuals[i]
+        else:
+            ending_cash[i] = cash_after_overhead[i] - physician[i] - savings_deposit[i]
 
         prior_savings = starting_savings_val if i == 0 else savings_balance[i - 1]
         savings_balance[i] = prior_savings + savings_deposit[i]

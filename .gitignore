@@ -1,5 +1,5 @@
 outputs/
-data/
+/data/
 *.xlsx
 .DS_Store
 __pycache__/
@@ -8,3 +8,5 @@ __pycache__/
 .streamlit/secrets.toml
 models/cns/dashboard/data/user_overrides.json
 models/cns/dashboard/data/scenarios/
+# committed_actuals.json is intentionally tracked — it's the locked actuals
+# source-of-truth for the deployed Streamlit Cloud app.

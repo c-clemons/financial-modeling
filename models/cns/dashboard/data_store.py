@@ -8,6 +8,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 import sys
+from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -20,6 +21,8 @@ from baseline_data import (
     BOBA_VOLUME_2024, GAP_VOLUME_2024,
     BOBA_VOLUME_2025, GAP_VOLUME_2025,
 )
+
+_FORECAST_LABEL_TO_IDX = {label: i for i, label in enumerate(FORECAST_MONTH_LABELS)}
 from financial_calcs import (
     generate_monthly_pl_forecast,
     generate_pl_by_location,
@@ -31,11 +34,25 @@ from financial_calcs import (
 from baseline_data import LOCATIONS
 
 DATA_DIR = Path(__file__).parent / "data"
+OVERRIDES_PATH = DATA_DIR / "user_overrides.json"
+COMMITTED_PATH = DATA_DIR / "committed_actuals.json"
+COMMITTED_KEYS = ("actuals_uploads", "cash_balance_uploads", "account_mapping_extras")
 N = NUM_FORECAST_MONTHS
 
 
 class DataStore:
-    """Singleton data layer for CNS dashboard."""
+    """Singleton data layer for CNS dashboard.
+
+    Two persistence files:
+
+    - ``user_overrides.json`` — soft overrides (assumptions, volumes, team
+      roster, scenario state). Frequently rewritten.
+    - ``committed_actuals.json`` — locked uploads (P&L actuals, balance-sheet
+      cash actuals, learned account mappings). Only the explicit upload-page
+      Commit/Revert buttons touch this file; assumption/volume/scenario writes
+      never do. This guarantees a committed actuals file survives any reset of
+      the soft-override layer.
+    """
 
     _instance = None
 
@@ -55,6 +72,7 @@ class DataStore:
     def __init__(self):
         self.defaults = copy.deepcopy(DEFAULT_ASSUMPTIONS)
         self.overrides = {}
+        self.committed = {}
         self.merged = {}
         self._baseline_actuals_2025 = copy.deepcopy(ACTUALS_2025)
         self._baseline_actuals_2025_totals = copy.deepcopy(ACTUALS_2025_TOTALS)
@@ -63,18 +81,38 @@ class DataStore:
         self.balance_sheet_2025 = BALANCE_SHEET_2025
         self.historical_ar = HISTORICAL_AR_TOTAL
         self._loaded = False
+        # Auto-load so a freshly constructed instance never starts with empty
+        # state. Without this, a Streamlit module reload could rebuild the
+        # singleton with empty overrides and the next save would wipe disk.
+        self.load()
 
     def load(self):
-        self.overrides = self._load_json(DATA_DIR / "user_overrides.json")
+        self.overrides = self._load_json(OVERRIDES_PATH)
+        self.committed = self._load_json(COMMITTED_PATH)
+        self._migrate_committed_from_overrides()
         self.merged = self._deep_merge(self.defaults, self.overrides)
         self._loaded = True
 
+    def _migrate_committed_from_overrides(self):
+        """One-time migration: pull committed-actuals keys out of the soft
+        overrides file into the locked file. Safe to run repeatedly."""
+        moved = False
+        for key in COMMITTED_KEYS:
+            if key in self.overrides:
+                # Disk-locked file wins if both exist (shouldn't, but be safe).
+                self.committed.setdefault(key, self.overrides[key])
+                del self.overrides[key]
+                moved = True
+        if moved:
+            self._save_json(COMMITTED_PATH, self.committed)
+            self._save_json(OVERRIDES_PATH, self.overrides)
+
     # ------------------------------------------------------------------
-    # Actuals (with upload support)
+    # Actuals (with upload support) — backed by the locked committed file
     # ------------------------------------------------------------------
     @property
     def actuals_2025(self) -> dict:
-        uploads = self.overrides.get("actuals_uploads", {}).get("2025")
+        uploads = self.committed.get("actuals_uploads", {}).get("2025")
         if not uploads:
             return self._baseline_actuals_2025
         merged = copy.deepcopy(self._baseline_actuals_2025)
@@ -84,7 +122,7 @@ class DataStore:
 
     @property
     def actuals_2025_totals(self) -> dict:
-        uploads = self.overrides.get("actuals_uploads", {}).get("2025")
+        uploads = self.committed.get("actuals_uploads", {}).get("2025")
         if not uploads:
             return self._baseline_actuals_2025_totals
         merged = copy.deepcopy(self._baseline_actuals_2025_totals)
@@ -93,7 +131,7 @@ class DataStore:
 
     @property
     def actuals_2026(self) -> dict:
-        uploads = self.overrides.get("actuals_uploads", {}).get("2026")
+        uploads = self.committed.get("actuals_uploads", {}).get("2026")
         if not uploads:
             return self._baseline_actuals_2026
         merged = copy.deepcopy(self._baseline_actuals_2026)
@@ -107,49 +145,109 @@ class DataStore:
 
     @property
     def n_actuals_2026(self) -> int:
-        uploads = self.overrides.get("actuals_uploads", {}).get("2026")
+        uploads = self.committed.get("actuals_uploads", {}).get("2026")
         if uploads and uploads.get("months"):
             return len(uploads["months"])
         return NUM_2026_ACTUALS
 
-    def set_uploaded_actuals(self, year: int, payload: dict):
+    def set_uploaded_actuals(self, year: int, payload: dict) -> dict:
         """Persist a parsed P&L upload as actuals for the given year.
 
-        payload shape:
+        Writes to the locked ``committed_actuals.json`` — independent from
+        the soft-override layer. payload shape:
             {'months': [...], 'data': {key: [vals]}, 'totals': {key: [vals]},
              'source_filename': str, 'uploaded_at': iso-str}
-        """
-        uploads = self.overrides.setdefault("actuals_uploads", {})
-        uploads[str(year)] = payload
-        self.merged = self._deep_merge(self.defaults, self.overrides)
-        self.save_overrides()
 
-    def clear_uploaded_actuals(self, year: int):
-        uploads = self.overrides.get("actuals_uploads", {})
+        Returns the github_sync status dict.
+        """
+        uploads = self.committed.setdefault("actuals_uploads", {})
+        uploads[str(year)] = payload
+        return self.save_committed(f"CNS dashboard: commit {year} P&L actuals")
+
+    def clear_uploaded_actuals(self, year: int) -> dict:
+        uploads = self.committed.get("actuals_uploads", {})
         if str(year) in uploads:
             del uploads[str(year)]
-            self.merged = self._deep_merge(self.defaults, self.overrides)
-            self.save_overrides()
+            return self.save_committed(f"CNS dashboard: revert {year} P&L actuals")
+        return {"ok": True, "message": "nothing to clear", "sha": None, "url": None}
 
     def get_uploaded_actuals_meta(self, year: int) -> dict:
-        return self.overrides.get("actuals_uploads", {}).get(str(year), {})
+        return self.committed.get("actuals_uploads", {}).get(str(year), {})
 
     # ------------------------------------------------------------------
-    # Account mapping (for unknown QBO accounts on upload)
+    # Cash balance actuals (from QBO Balance Sheet upload) — locked file
+    # ------------------------------------------------------------------
+    def set_uploaded_cash_balance(self, year: int, payload: dict) -> dict:
+        """Persist a parsed Balance Sheet upload as monthly cash actuals.
+
+        Writes to the locked ``committed_actuals.json``. payload shape:
+            {'months': [...], 'cash_total': [...],
+             'cash_by_account': {label: [...]},
+             'source_filename': str, 'uploaded_at': iso-str}
+
+        Returns the github_sync status dict.
+        """
+        uploads = self.committed.setdefault("cash_balance_uploads", {})
+        uploads[str(year)] = payload
+        return self.save_committed(f"CNS dashboard: commit {year} cash actuals")
+
+    def clear_uploaded_cash_balance(self, year: int) -> dict:
+        uploads = self.committed.get("cash_balance_uploads", {})
+        if str(year) in uploads:
+            del uploads[str(year)]
+            return self.save_committed(f"CNS dashboard: revert {year} cash actuals")
+        return {"ok": True, "message": "nothing to clear", "sha": None, "url": None}
+
+    def get_uploaded_cash_balance_meta(self, year: int) -> dict:
+        return self.committed.get("cash_balance_uploads", {}).get(str(year), {})
+
+    def get_cash_balance_actuals_by_index(self) -> dict:
+        """Map forecast-index → actual closing cash across all uploaded years.
+
+        Used by generate_cash_flow_forecast to anchor ending_cash for months
+        where we have a QBO balance sheet.
+        """
+        out: dict[int, float] = {}
+        for payload in self.committed.get("cash_balance_uploads", {}).values():
+            for m, v in zip(payload.get("months", []), payload.get("cash_total", [])):
+                idx = _FORECAST_LABEL_TO_IDX.get(m)
+                if idx is not None:
+                    out[idx] = float(v)
+        return out
+
+    def get_cash_actuals_count(self, year: int) -> int:
+        return len(self.committed.get("cash_balance_uploads", {})
+                   .get(str(year), {}).get("months", []))
+
+    # ------------------------------------------------------------------
+    # Account mapping (for unknown QBO accounts on upload) — locked file
     # ------------------------------------------------------------------
     def get_account_mapping_extras(self) -> dict:
-        return dict(self.overrides.get("account_mapping_extras", {}))
+        return dict(self.committed.get("account_mapping_extras", {}))
 
-    def add_account_mapping(self, qbo_label: str, target_key: str):
-        extras = self.overrides.setdefault("account_mapping_extras", {})
+    def add_account_mapping(self, qbo_label: str, target_key: str) -> dict:
+        extras = self.committed.setdefault("account_mapping_extras", {})
         extras[qbo_label] = target_key
-        self.save_overrides()
+        return self.save_committed("CNS dashboard: learn account mapping")
+
+    def add_account_mappings(self, mappings: dict) -> dict:
+        """Bulk-add account mappings with a single committed-file write."""
+        if not mappings:
+            return {"ok": True, "message": "no mappings", "sha": None, "url": None}
+        extras = self.committed.setdefault("account_mapping_extras", {})
+        for label, target in mappings.items():
+            extras[label] = target
+        return self.save_committed(
+            f"CNS dashboard: learn {len(mappings)} account mapping(s)"
+        )
 
     # ------------------------------------------------------------------
     # Assumptions
     # ------------------------------------------------------------------
     def get_assumptions(self) -> dict:
-        return copy.deepcopy(self.merged)
+        a = copy.deepcopy(self.merged)
+        a['cash_balance_actuals_by_index'] = self.get_cash_balance_actuals_by_index()
+        return a
 
     def set_assumption(self, key: str, value):
         self.overrides[key] = value
@@ -311,7 +409,29 @@ class DataStore:
     # ------------------------------------------------------------------
     def save_overrides(self):
         self.overrides["_last_updated"] = datetime.now().isoformat()
-        self._save_json(DATA_DIR / "user_overrides.json", self.overrides)
+        self._save_json(OVERRIDES_PATH, self.overrides)
+
+    def save_committed(self, commit_message: Optional[str] = None) -> dict:
+        """Write the locked committed-actuals file and mirror it to GitHub.
+
+        Returns the github_sync status dict so callers can surface success/
+        failure in the UI. GitHub sync is a best-effort no-op when no token is
+        configured (e.g. local development).
+        """
+        self.committed["_last_updated"] = datetime.now().isoformat()
+        self._save_json(COMMITTED_PATH, self.committed)
+        try:
+            from dashboard import github_sync
+        except Exception:
+            return {"ok": False, "message": "github_sync import failed",
+                    "sha": None, "url": None}
+        if not github_sync.sync_enabled():
+            return {"ok": False, "message": "no token configured",
+                    "sha": None, "url": None}
+        return github_sync.push_committed_file(
+            COMMITTED_PATH,
+            commit_message or f"CNS dashboard: update committed actuals ({self.committed['_last_updated']})",
+        )
 
     # ------------------------------------------------------------------
     # Internals

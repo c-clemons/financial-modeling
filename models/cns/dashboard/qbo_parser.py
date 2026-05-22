@@ -324,6 +324,102 @@ def _to_float(v) -> float:
 PAYROLL_KEYS = ("payroll_processing", "salaries_wages", "payroll_taxes")
 
 
+CASH_TOTAL_LABEL_RE = re.compile(r"^\s*total\s+for\s+bank\s+accounts\s*$", re.IGNORECASE)
+CASH_ACCOUNT_LABEL_RE = re.compile(r"\bchase\b.*\b(checking|savings)\b", re.IGNORECASE)
+
+
+def parse_balance_sheet_workbook(file_obj: IO | str | Path) -> dict:
+    """Parse a QBO Balance Sheet .xlsx and extract monthly cash positions.
+
+    Returns:
+        {
+            'months': ['Jan-26', 'Feb-26', ...],
+            'year': 2026,
+            'cash_total': [...],                # monthly Total for Bank Accounts
+            'cash_by_account': {label: [...]},  # individual bank rows
+            'meta': {'sheet': str, 'header_row': int, 'cash_row': int|None},
+        }
+
+    Raises ValueError if the month header or the bank-accounts total cannot be
+    located.
+    """
+    wb = openpyxl.load_workbook(file_obj, data_only=True)
+    ws = wb.worksheets[0]
+
+    header_row, month_cols = _detect_header(ws)
+    months = [m for _, m in month_cols]
+    cols = [c for c, _ in month_cols]
+    n = len(cols)
+    if not months:
+        raise ValueError("No monthly columns detected on the balance sheet.")
+
+    year_counts: dict[str, int] = {}
+    for m in months:
+        yr = "20" + m.split("-")[-1]
+        year_counts[yr] = year_counts.get(yr, 0) + 1
+    primary_year = int(max(year_counts.items(), key=lambda kv: kv[1])[0])
+
+    cash_total: Optional[list[float]] = None
+    cash_total_row: Optional[int] = None
+    cash_by_account: dict[str, list[float]] = {}
+    in_bank_section = False
+
+    for r in range(header_row + 1, ws.max_row + 1):
+        label = ws.cell(row=r, column=1).value
+        if not label or not str(label).strip():
+            continue
+        label_str = str(label).strip()
+        label_lc = label_str.lower()
+
+        if label_lc == "bank accounts":
+            in_bank_section = True
+            continue
+
+        if CASH_TOTAL_LABEL_RE.match(label_str):
+            cash_total = [_to_float(v) for v in _row_values(ws, r, cols)]
+            cash_total_row = r
+            in_bank_section = False
+            break
+
+        if in_bank_section and CASH_ACCOUNT_LABEL_RE.search(label_str):
+            cash_by_account[label_str] = [_to_float(v) for v in _row_values(ws, r, cols)]
+
+    if cash_total is None:
+        if cash_by_account:
+            cash_total = [
+                sum(vals[i] for vals in cash_by_account.values()) for i in range(n)
+            ]
+        else:
+            raise ValueError(
+                "Could not find 'Total for Bank Accounts' or any Chase Checking/"
+                "Savings rows on the balance sheet."
+            )
+
+    return {
+        "months": months,
+        "year": primary_year,
+        "cash_total": cash_total,
+        "cash_by_account": cash_by_account,
+        "meta": {
+            "sheet": ws.title,
+            "header_row": header_row,
+            "cash_row": cash_total_row,
+        },
+    }
+
+
+def to_cash_balance_payload(parsed: dict, source_filename: str) -> dict:
+    """Shape parsed balance-sheet output for DataStore.set_uploaded_cash_balance()."""
+    return {
+        "months": list(parsed["months"]),
+        "cash_total": list(parsed["cash_total"]),
+        "cash_by_account": {k: list(v) for k, v in parsed.get("cash_by_account", {}).items()},
+        "source_filename": source_filename,
+        "uploaded_at": datetime.now().isoformat(timespec="seconds"),
+        "meta": parsed.get("meta", {}),
+    }
+
+
 def to_upload_payload(parsed: dict, source_filename: str) -> dict:
     """Shape parsed output for DataStore.set_uploaded_actuals()."""
     n = len(parsed["months"])

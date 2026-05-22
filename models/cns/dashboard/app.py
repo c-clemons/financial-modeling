@@ -73,12 +73,7 @@ def main():
     </style>
     """, unsafe_allow_html=True)
 
-    if "initialized" not in st.session_state:
-        ds = DataStore.get()
-        ds.load()
-        st.session_state.initialized = True
-
-    ds = DataStore.get()
+    ds = DataStore.get()  # Auto-loads from disk on first construction.
 
     # Sidebar
     st.sidebar.title("CNS Financial Model")

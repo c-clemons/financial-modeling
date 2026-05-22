@@ -1,0 +1,7 @@
+{
+  "actuals_uploads": {},
+  "cash_balance_uploads": {},
+  "account_mapping_extras": {},
+  "_last_updated": "2026-05-22T12:35:59.553908",
+  "_note": "This file is the locked actuals source-of-truth for the CNS dashboard. Edits made through the Upload Actuals page write here (and get mirrored to GitHub when github_token is configured in st.secrets). Other override writes (assumptions, volumes, scenarios) cannot touch this file."
+}

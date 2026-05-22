@@ -7,6 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from baseline_data import FORECAST_MONTH_LABELS, NUM_FORECAST_MONTHS, MONTHS_12, LOCATIONS
+from empirica_core import fmt_currency  # noqa: F401  (re-exported below)
 
 N = NUM_FORECAST_MONTHS  # 60
 
@@ -65,8 +66,6 @@ SURGERY_TYPES = [
     ("gap", "GAP", "#3498db"),
 ]
 
-# Currency format
-def fmt_currency(val: float, decimals: int = 0) -> str:
-    if val < 0:
-        return f"-${abs(val):,.{decimals}f}"
-    return f"${val:,.{decimals}f}"
+# fmt_currency is re-exported from empirica_core (see import at top).
+# Kept here as a backwards-compatible symbol so existing
+# `from dashboard.constants import fmt_currency` imports continue to work.
