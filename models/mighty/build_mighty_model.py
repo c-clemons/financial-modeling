@@ -1036,6 +1036,937 @@ def build_cash_flow_forecast(wb, data):
 
 
 # ============================================================
+# CONSOLIDATED P&L
+# ============================================================
+
+# Mirror Streamlit SUMMARY_ROWS
+SUMMARY_ROWS_PL = [
+    # (display_name, [pl_label_candidates], is_bold, is_revenue_pos)
+    ("Session Revenue", ["Total 401000 Sessions", "Total for 401000 Sessions"], False, True),
+    ("Breakage Revenue", ["Total 403000 Breakage Revenue", "Total for 403000 Breakage Revenue"], False, True),
+    ("Retail Sales", ["404000 Retail Sales"], False, True),
+    ("Refunds", ["406000 Refunds"], False, True),
+    ("Discounts", ["407000 Discounts"], False, True),
+    ("Total Revenue", ["Total Income", "Total for Income"], True, True),
+    ("COGS & Merchant Fees", ["Total Cost of Goods Sold", "Total for Cost of Goods Sold"], False, False),
+    ("Gross Profit", ["Gross Profit"], True, False),
+    ("Marketing", ["Total 601000 Sales & Marketing", "Total for 601000 Sales & Marketing"], False, False),
+    ("Payroll", ["Total 602000 Payroll", "Total for 602000 Payroll"], False, False),
+    ("Software", ["603000 Software & Web Services"], False, False),
+    ("Professional Fees", ["Total 604000 Professional Fees", "Total for 604000 Professional Fees"], False, False),
+    ("Utilities", ["Total 616000 Utilities", "Total for 616000 Utilities"], False, False),
+    ("Property Costs", ["Total 700000 Property Costs", "Total for 700000 Property Costs"], False, False),
+    ("Total Operating Expenses", ["Total Expenses", "Total for Expenses"], True, False),
+    ("Net Operating Income", ["Net Operating Income"], True, False),
+    ("Depreciation", ["810000 Depreciation"], False, False),
+    ("Interest Expense", ["901000 Interest Expense/(Income)"], False, False),
+    ("Taxes Paid", ["902000 Taxes Paid"], False, False),
+    ("Property Taxes", ["903000 Property taxes"], False, False),
+    ("Total Other Expenses", ["Total Other Expenses", "Total for Other Expenses"], True, False),
+    ("Net Income", ["Net Income"], True, False),
+]
+
+
+def get_pl_actual(pl_dict, label_candidates):
+    """Return actual value for a P&L line by trying each candidate label."""
+    for lbl in label_candidates:
+        if lbl in pl_dict:
+            v = pl_dict[lbl]
+            if isinstance(v, (int, float)):
+                return float(v)
+    return 0.0
+
+
+def build_pl_consolidated(wb, data):
+    """
+    P&L Summary tab. Consolidated P&L by month.
+
+    Layout:
+      - Col B: Line Item
+      - Cols D..AM: 36 months (Jan 2026 - Dec 2028)
+      - Rows: SUMMARY_ROWS_PL structure
+      - Actuals (Jan-Apr 2026): hard-coded from c["pl"]
+      - Forecast (May 2026+): formulas referencing Sales Forecast, Assumptions, and CF tab
+    """
+    ws = wb.create_sheet("P&L")
+    ws.sheet_view.showGridLines = False
+    ws.freeze_panes = "D6"
+
+    ws.column_dimensions["A"].width = 2
+    ws.column_dimensions["B"].width = 30
+    ws.column_dimensions["C"].width = 10
+    for i in range(36):
+        ws.column_dimensions[get_column_letter(4 + i)].width = 12
+
+    ws["B2"] = "Profit & Loss (Consolidated)"
+    ws["B2"].font = title_font
+    ws["B3"] = "Actuals Jan-Apr 2026. Forecast May 2026+ uses formulas from Sales Forecast and Assumptions."
+    ws["B3"].font = Font(name="Calibri", size=10, italic=True, color="666666")
+
+    HEADER_ROW = 5
+    section_bar(ws, HEADER_ROW - 1, 2, 39, "Monthly P&L")
+    label_cell(ws, HEADER_ROW, 2, "Line Item", bold=True)
+    ws.cell(row=HEADER_ROW, column=2).fill = header_fill
+    ws.cell(row=HEADER_ROW, column=2).font = header_font
+    for i, lbl in enumerate(MONTH_LABELS):
+        cell = ws.cell(row=HEADER_ROW, column=4 + i, value=lbl)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = center_align
+
+    pl_data = data["committed"].get("pl", {})
+    a_refs = wb._mighty_refs["assumptions"]
+    sf_refs = wb._mighty_refs["sales_forecast"]
+    cf_refs = wb._mighty_refs["cash_flow"]
+
+    row = HEADER_ROW + 1
+    refs = {"rows": {}}
+
+    # Precompute average retail and depreciation/interest from actuals
+    retail_avg = 0
+    depr_avg = 0
+    int_sched = data["committed"].get("interest_schedule", {})
+    other_avgs = {}
+
+    if pl_data:
+        retails = [get_pl_actual(pl_data[m], ["404000 Retail Sales"]) for m in pl_data]
+        retail_avg = sum(retails) / max(len(retails), 1)
+        deprs = [get_pl_actual(pl_data[m], ["810000 Depreciation"]) for m in pl_data]
+        depr_avg = sum(deprs) / max(len(deprs), 1)
+
+    for display, candidates, is_bold, is_rev in SUMMARY_ROWS_PL:
+        label_cell(ws, row, 2, display, bold=is_bold)
+        if is_bold:
+            for c in range(2, 40):
+                ws.cell(row=row, column=c).fill = light_fill
+
+        for i, mk in enumerate(MONTH_KEYS):
+            col = get_column_letter(4 + i)
+            if i <= LAST_ACTUALS_IDX:
+                # Actuals
+                month_label = MONTH_LABELS[i]
+                v = get_pl_actual(pl_data.get(month_label, {}), candidates)
+                actual_value_cell(ws, row, 4 + i, v, fmt=CURR, bold=is_bold)
+            else:
+                # Forecast formulas
+                formula = build_pl_forecast_formula(
+                    display, i, col, sf_refs, a_refs, cf_refs,
+                    retail_avg, depr_avg, int_sched.get(mk, 0),
+                    pl_data, refs,
+                )
+                if formula is not None:
+                    formula_cell(ws, row, 4 + i, formula, fmt=CURR, bold=is_bold,
+                                 fill=(light_fill if is_bold else None))
+                else:
+                    # Default to zero
+                    formula_cell(ws, row, 4 + i, 0, fmt=CURR, bold=is_bold,
+                                 fill=(light_fill if is_bold else None))
+        refs["rows"][display] = row
+        row += 1
+
+    wb._mighty_refs["pl"] = refs
+    return refs
+
+
+def build_pl_forecast_formula(display, month_idx, col, sf_refs, a_refs, cf_refs,
+                                retail_avg, depr_avg, interest_val, pl_data, pl_refs):
+    """Return Excel formula string for a forecast P&L cell."""
+    # Sales Forecast TOTAL row gives gross cash sales for this month
+    sf_tot = f"'Sales Forecast'!{col}{sf_refs['total_row']}"
+
+    # Earned & breakage curves require summing over 7-month lag
+    # earned_sum = SUMPRODUCT of {sales[m-0..6]} × {earned[0..6]}
+    # For simplicity: build the lag sum
+    earned_lags = []
+    breakage_lags = []
+    a_earned_row = a_refs["earned_row"]
+    a_breakage_row = a_refs["breakage_row"]
+    # For each lag (0-6), the source column = current month idx - lag
+    # That's column (4 + month_idx - lag)
+    for lag in range(7):
+        src_idx = month_idx - lag
+        if src_idx < 0:
+            continue  # No data that far back
+        src_col = get_column_letter(4 + src_idx)
+        lag_col = get_column_letter(3 + lag)  # Assumptions cols C..I for lags 0..6
+        earned_lags.append(
+            f"'Sales Forecast'!{src_col}{sf_refs['total_row']}*Assumptions!${lag_col}${a_earned_row}"
+        )
+        breakage_lags.append(
+            f"'Sales Forecast'!{src_col}{sf_refs['total_row']}*Assumptions!${lag_col}${a_breakage_row}"
+        )
+    earned_formula = "+".join(earned_lags) if earned_lags else "0"
+    breakage_formula = "+".join(breakage_lags) if breakage_lags else "0"
+
+    if display == "Session Revenue":
+        return f"={earned_formula}"
+    if display == "Breakage Revenue":
+        return f"={breakage_formula}"
+    if display == "Retail Sales":
+        return f"={retail_avg}"
+    if display == "Refunds":
+        # Refunds = (Session + Breakage + Retail) × refund_pct
+        return (f"=({earned_formula}+{breakage_formula}+{retail_avg})*"
+                f"Assumptions!$C${a_refs['refund_row']}")
+    if display == "Discounts":
+        return (f"=({earned_formula}+{breakage_formula}+{retail_avg})*"
+                f"Assumptions!$C${a_refs['discount_row']}")
+    if display == "Total Revenue":
+        # Sum of Session + Breakage + Retail + Refunds + Discounts
+        rows = pl_refs["rows"]
+        return (f"={col}{rows.get('Session Revenue', '#REF!')}"
+                f"+{col}{rows.get('Breakage Revenue', '#REF!')}"
+                f"+{col}{rows.get('Retail Sales', '#REF!')}"
+                f"+{col}{rows.get('Refunds', '#REF!')}"
+                f"+{col}{rows.get('Discounts', '#REF!')}")
+    if display == "COGS & Merchant Fees":
+        rows = pl_refs["rows"]
+        # Pull from CF Merchant Fees & COGS row OR compute
+        return f"={col}{cf_refs['opex_rows']['finance']}"
+    if display == "Gross Profit":
+        rows = pl_refs["rows"]
+        return f"={col}{rows.get('Total Revenue', '#REF!')}-{col}{rows.get('COGS & Merchant Fees', '#REF!')}"
+    # OpEx lines pull from Cash Flow Forecast (consolidated) rows
+    opex_map = {
+        "Marketing": cf_refs["opex_rows"].get("marketing"),
+        "Payroll": cf_refs["opex_rows"].get("staff"),
+        "Software": None,  # subset of admin; approximate via 30% of admin
+        "Professional Fees": cf_refs["opex_rows"].get("professional"),
+        "Utilities": cf_refs["opex_rows"].get("utilities"),
+        "Property Costs": cf_refs["opex_rows"].get("property"),
+    }
+    if display in opex_map and opex_map[display]:
+        return f"='Cash Flow Forecast'!{col}{opex_map[display]}"
+    if display == "Software":
+        # Estimate: avg actual software / avg actual admin × admin forecast
+        sw_avg = 0
+        admin_avg = 0
+        for m, lines in pl_data.items():
+            sw_avg += get_pl_actual(lines, ["603000 Software & Web Services"])
+            admin_avg += (
+                get_pl_actual(lines, ["603000 Software & Web Services"])
+                + get_pl_actual(lines, ["608000 Insurance"])
+                + get_pl_actual(lines, ["610000 Office Supplies & General Expense"])
+            )
+        if admin_avg > 0:
+            ratio = sw_avg / admin_avg
+            return f"='Cash Flow Forecast'!{col}{cf_refs['opex_rows']['admin']}*{ratio:.4f}"
+        return "0"
+    if display == "Total Operating Expenses":
+        rows = pl_refs["rows"]
+        return (f"={col}{rows['Marketing']}+{col}{rows['Payroll']}+{col}{rows['Software']}"
+                f"+{col}{rows['Professional Fees']}+{col}{rows['Utilities']}+{col}{rows['Property Costs']}")
+    if display == "Net Operating Income":
+        rows = pl_refs["rows"]
+        return f"={col}{rows['Gross Profit']}-{col}{rows['Total Operating Expenses']}"
+    if display == "Depreciation":
+        return f"={depr_avg}"
+    if display == "Interest Expense":
+        return f"={interest_val}"
+    if display == "Taxes Paid":
+        return "0"
+    if display == "Property Taxes":
+        # Use avg actual or 0
+        return "0"
+    if display == "Total Other Expenses":
+        rows = pl_refs["rows"]
+        return (f"={col}{rows['Depreciation']}+{col}{rows['Interest Expense']}"
+                f"+{col}{rows['Taxes Paid']}+{col}{rows['Property Taxes']}")
+    if display == "Net Income":
+        rows = pl_refs["rows"]
+        return f"={col}{rows['Net Operating Income']}-{col}{rows['Total Other Expenses']}"
+    return None
+
+
+# ============================================================
+# CASH, DEBT & EQUITY
+# ============================================================
+
+def build_cash_debt_equity(wb, data):
+    """
+    Cash, Debt & Equity tab.
+
+    Sections:
+      1. Cash position (timeline from CF)
+      2. Loan amortization schedules (one row per loan, 36 columns)
+      3. Total debt timeline
+      4. Owner equity (intercompany / opening balance)
+      5. Debt service forecast (monthly P+I from amortization)
+    """
+    ws = wb.create_sheet("Cash, Debt & Equity")
+    ws.sheet_view.showGridLines = False
+    ws.freeze_panes = "D5"
+
+    ws.column_dimensions["A"].width = 2
+    ws.column_dimensions["B"].width = 30
+    ws.column_dimensions["C"].width = 12
+    for i in range(36):
+        ws.column_dimensions[get_column_letter(4 + i)].width = 12
+
+    ws["B2"] = "Cash, Debt & Equity"
+    ws["B2"].font = title_font
+
+    HEADER_ROW = 4
+    label_cell(ws, HEADER_ROW, 2, "Item", bold=True)
+    ws.cell(row=HEADER_ROW, column=2).fill = header_fill
+    ws.cell(row=HEADER_ROW, column=2).font = header_font
+    for i, lbl in enumerate(MONTH_LABELS):
+        cell = ws.cell(row=HEADER_ROW, column=4 + i, value=lbl)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = center_align
+
+    cf_refs = wb._mighty_refs["cash_flow"]
+    a_refs = wb._mighty_refs["assumptions"]
+
+    row = HEADER_ROW + 1
+
+    # ----- Section 1: Cash Position -----
+    section_bar(ws, row, 2, 39, "CASH POSITION")
+    row += 1
+    label_cell(ws, row, 2, "Ending Cash Balance", bold=True)
+    for i in range(36):
+        col = get_column_letter(4 + i)
+        formula_cell(ws, row, 4 + i,
+                     f"='Cash Flow Forecast'!{col}{cf_refs['end_cash_row']}",
+                     fmt=CURR, bold=True, fill=green_fill)
+    row += 2
+
+    # ----- Section 2: Loan Balances (per-loan amortization) -----
+    section_bar(ws, row, 2, 39, "DEBT SCHEDULE — Loan Balances by Month")
+    row += 1
+    refs = {"loan_rows": {}}
+    refs["loan_start"] = row
+
+    # For each loan: starting balance (Apr 2026) hard-coded, then formula:
+    # If amortizing: max(prev - monthly_pmt, 0)
+    # If interest-only: prev (flat)
+    loans = data["baseline"].get("loans", [])
+    # Get actual balance per loan per actual month from BS data
+    bs = data["committed"].get("bs", {})
+    # Map loan name → bs key (best-effort)
+    bs_key_map = {
+        "MindBody Loan - SM": ["242001 MindBody Loan:MindBody Loan - SM"],
+        "MindBody Loan - PH": ["242002 MindBody Loan:MindBody Loan - PH"],
+        "MindBody Loan - LF": ["242003 MindBody Loan:MindBody Loan - LF"],
+        "MindBody Loan - MR": ["242004 MindBody Loan:MindBody Loan - MR"],
+        "Samson Loan": ["243000 Samson Loan"],
+        "Specialty Capital Loan": ["244000 Specialty Capital Loan"],
+        "Norbrook Inc Loan": ["246000 Norbrook"],
+    }
+
+    def extract_bs_value(month_label, patterns):
+        if month_label not in bs:
+            return None
+        for line, val in bs[month_label].items():
+            for p in patterns:
+                if p in line and isinstance(val, (int, float)):
+                    return float(val)
+        return None
+
+    for loan in loans:
+        name = loan.get("name", "?")
+        label_cell(ws, row, 2, name, bold=True)
+        avg_pmt = float(loan.get("avg_monthly_payment", 0))
+        is_amortizing = avg_pmt > 0
+        # Actuals: pull from BS by month
+        prev_col = None
+        for i, mk in enumerate(MONTH_KEYS):
+            col = get_column_letter(4 + i)
+            month_label = MONTH_LABELS[i]
+            if i <= LAST_ACTUALS_IDX:
+                bs_val = extract_bs_value(month_label, bs_key_map.get(name, []))
+                if bs_val is None:
+                    bs_val = float(loan.get("current_balance", 0)) if i == LAST_ACTUALS_IDX else 0
+                actual_value_cell(ws, row, 4 + i, bs_val, fmt=CURR)
+            else:
+                # Forecast
+                if is_amortizing:
+                    formula_cell(ws, row, 4 + i,
+                                 f"=MAX({prev_col}{row}-{avg_pmt},0)",
+                                 fmt=CURR)
+                else:
+                    # Interest-only: flat
+                    formula_cell(ws, row, 4 + i,
+                                 f"={prev_col}{row}",
+                                 fmt=CURR)
+            prev_col = col
+        refs["loan_rows"][name] = row
+        row += 1
+
+    # Total Debt
+    refs["total_debt_row"] = row
+    label_cell(ws, row, 2, "TOTAL DEBT", bold=True)
+    for i in range(36):
+        col = get_column_letter(4 + i)
+        formula_cell(ws, row, 4 + i,
+                     f"=SUM({col}{refs['loan_start']}:{col}{row - 1})",
+                     fmt=CURR, bold=True, fill=light_fill)
+    row += 2
+
+    # ----- Section 3: Debt Service Forecast -----
+    section_bar(ws, row, 2, 39, "MONTHLY DEBT SERVICE")
+    row += 1
+    refs["debt_service_start"] = row
+    for loan in loans:
+        name = loan.get("name", "?")
+        avg_pmt = float(loan.get("avg_monthly_payment", 0))
+        label_cell(ws, row, 2, name)
+        for i in range(36):
+            col = get_column_letter(4 + i)
+            if i <= LAST_ACTUALS_IDX:
+                # No actuals broken out per loan from SCF; use 0 or approximate
+                actual_value_cell(ws, row, 4 + i, 0, fmt=CURR)
+            else:
+                if avg_pmt > 0:
+                    # Payment = avg_pmt, but only if loan balance > 0 in that month
+                    loan_balance_row = refs["loan_rows"][name]
+                    formula_cell(ws, row, 4 + i,
+                                 f"=IF({col}{loan_balance_row}>0,{avg_pmt},0)",
+                                 fmt=CURR)
+                else:
+                    # Interest-only: balance × annual rate / 12
+                    loan_balance_row = refs["loan_rows"][name]
+                    rate = float(loan.get("rate", 0))
+                    formula_cell(ws, row, 4 + i,
+                                 f"={col}{loan_balance_row}*{rate}/12",
+                                 fmt=CURR)
+        row += 1
+    refs["debt_service_end"] = row - 1
+
+    # Total Debt Service
+    refs["total_debt_service_row"] = row
+    label_cell(ws, row, 2, "TOTAL DEBT SERVICE", bold=True)
+    for i in range(36):
+        col = get_column_letter(4 + i)
+        formula_cell(ws, row, 4 + i,
+                     f"=SUM({col}{refs['debt_service_start']}:{col}{row - 1})",
+                     fmt=CURR, bold=True, fill=light_fill)
+    row += 2
+
+    # ----- Section 4: Owner Equity / Intercompany -----
+    section_bar(ws, row, 2, 39, "OWNER EQUITY / INTERCOMPANY")
+    row += 1
+    label_cell(ws, row, 2, "Intercompany Net Position", bold=True)
+    # From CF intercompany row
+    inter_row_idx = cf_refs["financing_end"]  # Last financing line = intercompany
+    for i in range(36):
+        col = get_column_letter(4 + i)
+        formula_cell(ws, row, 4 + i,
+                     f"='Cash Flow Forecast'!{col}{inter_row_idx}",
+                     fmt=CURR)
+
+    wb._mighty_refs["cash_debt_equity"] = refs
+    return refs
+
+
+# ============================================================
+# CAPEX
+# ============================================================
+
+def build_capex(wb, data):
+    """CapEx project schedule tab."""
+    ws = wb.create_sheet("CapEx")
+    ws.sheet_view.showGridLines = False
+
+    ws.column_dimensions["A"].width = 2
+    ws.column_dimensions["B"].width = 30
+    ws.column_dimensions["C"].width = 14
+    ws.column_dimensions["D"].width = 16
+    ws.column_dimensions["E"].width = 14
+    ws.column_dimensions["F"].width = 14
+    ws.column_dimensions["G"].width = 14
+
+    ws["B2"] = "CapEx & Studio Buildout"
+    ws["B2"].font = title_font
+    ws["B3"] = "Add planned capital expenditures here. Outflows feed Cash Flow Forecast investing section."
+    ws["B3"].font = Font(name="Calibri", size=10, italic=True, color="666666")
+
+    HEADER_ROW = 5
+    section_bar(ws, HEADER_ROW - 1, 2, 7, "Projects")
+    header_row(ws, HEADER_ROW, 2, ["Project", "Type", "Location", "Total Budget",
+                                     "Start Month", "Duration (mo)"])
+
+    row = HEADER_ROW + 1
+    capex_projects = data["committed"].get("capex_projects", [])
+    if not capex_projects:
+        # Show empty placeholder rows
+        for _ in range(10):
+            for c in range(2, 8):
+                cell = ws.cell(row=row, column=c, value=None)
+                cell.fill = input_fill
+                cell.border = thin_border
+            row += 1
+    else:
+        for proj in capex_projects:
+            input_cell(ws, row, 2, proj.get("name", ""), fmt="@")
+            input_cell(ws, row, 3, proj.get("location", ""), fmt="@")
+            input_cell(ws, row, 4, proj.get("location", ""), fmt="@")
+            input_cell(ws, row, 5, float(proj.get("total_budget", 0)), fmt=CURR)
+            input_cell(ws, row, 6, proj.get("start_month", ""), fmt="@")
+            input_cell(ws, row, 7, int(proj.get("duration_months", 1)), fmt=NUM)
+            row += 1
+
+
+# ============================================================
+# QBO ACTUALS (raw reference)
+# ============================================================
+
+def build_qbo_actuals(wb, data):
+    """Dump raw P&L, BS, SCF actuals from accountant for reference."""
+    ws = wb.create_sheet("QBO Actuals")
+    ws.sheet_view.showGridLines = False
+    ws.column_dimensions["A"].width = 2
+    ws.column_dimensions["B"].width = 50
+    for i in range(8):
+        ws.column_dimensions[get_column_letter(3 + i)].width = 14
+
+    ws["B2"] = "QBO Actuals (Accountant-Booked)"
+    ws["B2"].font = title_font
+    ws["B3"] = "Source data from accountant. Read-only reference. Used in formulas via the P&L tab."
+    ws["B3"].font = Font(name="Calibri", size=10, italic=True, color="666666")
+
+    row = 5
+    for section_name, key in [("P&L", "pl"), ("Balance Sheet", "bs"), ("Cash Flow Statement", "scf")]:
+        section_bar(ws, row, 2, 8, section_name)
+        row += 1
+        section_data = data["committed"].get(key, {})
+        if not section_data:
+            row += 2
+            continue
+        # Get all months sorted
+        months = sorted(section_data.keys(),
+                        key=lambda m: month_label_to_key(m) or "")
+        # Headers
+        label_cell(ws, row, 2, "Account", bold=True)
+        for i, m in enumerate(months):
+            cell = ws.cell(row=row, column=3 + i, value=m)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = center_align
+        row += 1
+        # All unique line items
+        all_lines = set()
+        for m_data in section_data.values():
+            all_lines.update(m_data.keys())
+        # Sort lines (totals last would be ideal, but just alpha for now)
+        for line in sorted(all_lines):
+            label_cell(ws, row, 2, line)
+            any_value = False
+            for i, m in enumerate(months):
+                v = section_data[m].get(line)
+                if isinstance(v, (int, float)):
+                    actual_value_cell(ws, row, 3 + i, float(v), fmt=CURR)
+                    any_value = True
+                else:
+                    actual_value_cell(ws, row, 3 + i, 0, fmt=CURR)
+            row += 1
+        row += 2
+
+
+# ============================================================
+# PER-STUDIO P&L TABS
+# ============================================================
+
+def get_studio_pl_actual(studio_data, label_candidates, month_label):
+    """Pull actual value for a per-studio P&L line."""
+    month_dict = studio_data.get("data", {}).get(month_label, {})
+    for lbl in label_candidates:
+        if lbl in month_dict:
+            v = month_dict[lbl]
+            if isinstance(v, (int, float)):
+                return float(v)
+    return 0.0
+
+
+def build_studio_pl(wb, data, studio_code, studio_name):
+    """Build a single per-studio P&L tab matching the consolidated P&L structure."""
+    ws = wb.create_sheet(f"{studio_code} P&L")
+    ws.sheet_view.showGridLines = False
+    ws.freeze_panes = "D6"
+
+    ws.column_dimensions["A"].width = 2
+    ws.column_dimensions["B"].width = 28
+    ws.column_dimensions["C"].width = 10
+    for i in range(36):
+        ws.column_dimensions[get_column_letter(4 + i)].width = 12
+
+    ws["B2"] = f"{studio_name} ({studio_code}) — Profit & Loss"
+    ws["B2"].font = title_font
+
+    HEADER_ROW = 5
+    section_bar(ws, HEADER_ROW - 1, 2, 39, "Monthly P&L")
+    label_cell(ws, HEADER_ROW, 2, "Line Item", bold=True)
+    ws.cell(row=HEADER_ROW, column=2).fill = header_fill
+    ws.cell(row=HEADER_ROW, column=2).font = header_font
+    for i, lbl in enumerate(MONTH_LABELS):
+        cell = ws.cell(row=HEADER_ROW, column=4 + i, value=lbl)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = center_align
+
+    a_refs = wb._mighty_refs["assumptions"]
+    sf_refs = wb._mighty_refs["sales_forecast"]
+    studios = data["committed"].get("studios", {})
+    studio_data = studios.get(studio_code, {"data": {}})
+    # Get studio sales row in Sales Forecast tab
+    studio_sales_row = sf_refs["studios"].get(studio_code)
+
+    # OpEx forecast for this studio
+    studio_opex = data["merged"].get("opex_assumptions", {}).get(studio_code, {})
+
+    # Approximate retail for this studio (avg actual)
+    retail_vals = [get_studio_pl_actual(studio_data, ["404000 Retail Sales"], m)
+                   for m in studio_data.get("data", {})]
+    retail_avg = sum(retail_vals) / max(len(retail_vals), 1) if retail_vals else 0
+
+    row = HEADER_ROW + 1
+    refs = {"rows": {}}
+
+    # OpEx categories applicable per-studio
+    studio_opex_map = {
+        "Marketing": "marketing",
+        "Payroll": "staff",
+        "Software": None,  # part of admin
+        "Professional Fees": "professional_fees",
+        "Utilities": "utilities",
+        "Property Costs": "property",
+    }
+
+    for display, candidates, is_bold, is_rev in SUMMARY_ROWS_PL:
+        label_cell(ws, row, 2, display, bold=is_bold)
+        if is_bold:
+            for c in range(2, 40):
+                ws.cell(row=row, column=c).fill = light_fill
+
+        for i, mk in enumerate(MONTH_KEYS):
+            col = get_column_letter(4 + i)
+            if i <= LAST_ACTUALS_IDX:
+                month_label = MONTH_LABELS[i]
+                v = get_studio_pl_actual(studio_data, candidates, month_label)
+                actual_value_cell(ws, row, 4 + i, v, fmt=CURR, bold=is_bold)
+            else:
+                formula = _studio_forecast_formula(
+                    display, i, col, studio_sales_row, a_refs, sf_refs,
+                    studio_opex, studio_opex_map, retail_avg, refs,
+                )
+                if formula is not None:
+                    formula_cell(ws, row, 4 + i, formula, fmt=CURR, bold=is_bold,
+                                 fill=(light_fill if is_bold else None))
+                else:
+                    formula_cell(ws, row, 4 + i, 0, fmt=CURR, bold=is_bold,
+                                 fill=(light_fill if is_bold else None))
+        refs["rows"][display] = row
+        row += 1
+
+    if not hasattr(wb, "_mighty_studio_refs"):
+        wb._mighty_studio_refs = {}
+    wb._mighty_studio_refs[studio_code] = refs
+    return refs
+
+
+def _studio_forecast_formula(display, month_idx, col, sales_row, a_refs, sf_refs,
+                               studio_opex, opex_map, retail_avg, pl_refs):
+    """Per-studio forecast formula generator."""
+    # Lag formulas reference the studio's own sales row
+    earned_lags = []
+    breakage_lags = []
+    a_earned_row = a_refs["earned_row"]
+    a_breakage_row = a_refs["breakage_row"]
+    for lag in range(7):
+        src_idx = month_idx - lag
+        if src_idx < 0:
+            continue
+        src_col = get_column_letter(4 + src_idx)
+        lag_col = get_column_letter(3 + lag)
+        earned_lags.append(
+            f"'Sales Forecast'!{src_col}{sales_row}*Assumptions!${lag_col}${a_earned_row}"
+        )
+        breakage_lags.append(
+            f"'Sales Forecast'!{src_col}{sales_row}*Assumptions!${lag_col}${a_breakage_row}"
+        )
+    earned_formula = "+".join(earned_lags) if earned_lags else "0"
+    breakage_formula = "+".join(breakage_lags) if breakage_lags else "0"
+
+    if display == "Session Revenue":
+        return f"={earned_formula}"
+    if display == "Breakage Revenue":
+        return f"={breakage_formula}"
+    if display == "Retail Sales":
+        return f"={retail_avg}"
+    if display == "Refunds":
+        return (f"=({earned_formula}+{breakage_formula}+{retail_avg})*"
+                f"Assumptions!$C${a_refs['refund_row']}")
+    if display == "Discounts":
+        return (f"=({earned_formula}+{breakage_formula}+{retail_avg})*"
+                f"Assumptions!$C${a_refs['discount_row']}")
+    if display == "Total Revenue":
+        rows = pl_refs["rows"]
+        return (f"={col}{rows['Session Revenue']}+{col}{rows['Breakage Revenue']}"
+                f"+{col}{rows['Retail Sales']}+{col}{rows['Refunds']}+{col}{rows['Discounts']}")
+    if display == "COGS & Merchant Fees":
+        rows = pl_refs["rows"]
+        return (f"={col}{rows['Total Revenue']}*(Assumptions!$C${a_refs['merchant_row']}"
+                f"+Assumptions!$C${a_refs['cogs_row']})")
+    if display == "Gross Profit":
+        rows = pl_refs["rows"]
+        return f"={col}{rows['Total Revenue']}-{col}{rows['COGS & Merchant Fees']}"
+    # OpEx lines: pull from studio_opex JSON for the right category
+    if display in opex_map:
+        ovr_cat = opex_map[display]
+        if ovr_cat:
+            mk = MONTH_KEYS[month_idx]
+            val = studio_opex.get(ovr_cat, {})
+            if isinstance(val, dict):
+                v = val.get(mk, 0)
+                try:
+                    return f"={float(v)}"
+                except (ValueError, TypeError):
+                    return "0"
+        if display == "Software":
+            return "0"
+    if display == "Total Operating Expenses":
+        rows = pl_refs["rows"]
+        return (f"={col}{rows['Marketing']}+{col}{rows['Payroll']}+{col}{rows['Software']}"
+                f"+{col}{rows['Professional Fees']}+{col}{rows['Utilities']}+{col}{rows['Property Costs']}")
+    if display == "Net Operating Income":
+        rows = pl_refs["rows"]
+        return f"={col}{rows['Gross Profit']}-{col}{rows['Total Operating Expenses']}"
+    if display in ("Depreciation", "Interest Expense", "Taxes Paid", "Property Taxes"):
+        return "0"  # Not allocated per studio
+    if display == "Total Other Expenses":
+        rows = pl_refs["rows"]
+        return (f"={col}{rows['Depreciation']}+{col}{rows['Interest Expense']}"
+                f"+{col}{rows['Taxes Paid']}+{col}{rows['Property Taxes']}")
+    if display == "Net Income":
+        rows = pl_refs["rows"]
+        return f"={col}{rows['Net Operating Income']}-{col}{rows['Total Other Expenses']}"
+    return None
+
+
+def build_all_studios_summary(wb, data):
+    """Side-by-side studio comparison: key metrics per studio."""
+    ws = wb.create_sheet("All Studios Summary")
+    ws.sheet_view.showGridLines = False
+    ws.freeze_panes = "D5"
+
+    ws.column_dimensions["A"].width = 2
+    ws.column_dimensions["B"].width = 22
+    ws.column_dimensions["C"].width = 14
+    for i in range(36):
+        ws.column_dimensions[get_column_letter(4 + i)].width = 12
+
+    ws["B2"] = "All Studios — Summary"
+    ws["B2"].font = title_font
+
+    HEADER_ROW = 4
+    label_cell(ws, HEADER_ROW, 2, "Studio / Metric", bold=True)
+    ws.cell(row=HEADER_ROW, column=2).fill = header_fill
+    ws.cell(row=HEADER_ROW, column=2).font = header_font
+    for i, lbl in enumerate(MONTH_LABELS):
+        cell = ws.cell(row=HEADER_ROW, column=4 + i, value=lbl)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = center_align
+
+    row = HEADER_ROW + 1
+
+    # For each studio: Net Revenue row + EBITDA row
+    studio_refs = wb._mighty_studio_refs
+    for code, name in STUDIOS:
+        # Section header
+        section_bar(ws, row, 2, 39, f"{name} ({code})")
+        row += 1
+        rows_studio = studio_refs[code]["rows"]
+        for metric in ["Total Revenue", "Gross Profit", "Total Operating Expenses",
+                       "Net Operating Income"]:
+            label_cell(ws, row, 2, metric, bold=(metric == "Net Operating Income"))
+            for i in range(36):
+                col = get_column_letter(4 + i)
+                formula_cell(ws, row, 4 + i,
+                             f"='{code} P&L'!{col}{rows_studio[metric]}",
+                             fmt=CURR,
+                             bold=(metric == "Net Operating Income"))
+            row += 1
+        row += 1
+
+
+# ============================================================
+# SUMMARY & CONTROLS (client's required top tab)
+# ============================================================
+
+def build_summary_controls(wb, data):
+    """
+    Top-level dashboard. Mimics client's existing format from
+    2026 Mighty Financial Model - 4.21.26-CC-mar.xlsx but without
+    the "New Studio Controls" section.
+    """
+    ws = wb.create_sheet("Summary & Controls")
+    ws.sheet_view.showGridLines = False
+
+    ws.column_dimensions["A"].width = 2
+    ws.column_dimensions["B"].width = 24
+    ws.column_dimensions["C"].width = 22
+    for i in range(36):
+        ws.column_dimensions[get_column_letter(4 + i)].width = 11
+
+    ws["B2"] = "Summary & Controls"
+    ws["B2"].font = title_font
+    ws["B3"] = "Top-level dashboard. Studio sales, EBITDA, YoY summary, charts."
+    ws["B3"].font = Font(name="Calibri", size=10, italic=True, color="666666")
+
+    sf_refs = wb._mighty_refs["sales_forecast"]
+    studio_refs = wb._mighty_studio_refs
+
+    HEADER_ROW = 5
+    section_bar(ws, HEADER_ROW - 1, 2, 39, "Monthly Total Session Sales by Studio")
+    # Month headers
+    label_cell(ws, HEADER_ROW, 2, "Metric", bold=True)
+    label_cell(ws, HEADER_ROW, 3, "Studio", bold=True)
+    for c in (2, 3):
+        ws.cell(row=HEADER_ROW, column=c).fill = header_fill
+        ws.cell(row=HEADER_ROW, column=c).font = header_font
+    for i, lbl in enumerate(MONTH_LABELS):
+        cell = ws.cell(row=HEADER_ROW, column=4 + i, value=lbl)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = center_align
+    row = HEADER_ROW + 1
+
+    # Total Session Sales row
+    label_cell(ws, row, 2, "Total Session Sales", bold=True)
+    for i in range(36):
+        col = get_column_letter(4 + i)
+        formula_cell(ws, row, 4 + i,
+                     f"='Sales Forecast'!{col}{sf_refs['total_row']}",
+                     fmt=CURR, bold=True, fill=light_fill)
+    row += 1
+    # Per-studio rows
+    for code, name in STUDIOS:
+        s_row = sf_refs["studios"].get(code)
+        label_cell(ws, row, 3, name)
+        for i in range(36):
+            col = get_column_letter(4 + i)
+            formula_cell(ws, row, 4 + i,
+                         f"='Sales Forecast'!{col}{s_row}",
+                         fmt=CURR)
+        row += 1
+    row += 1
+
+    # EBITDA section
+    section_bar(ws, row, 2, 39, "Monthly EBITDA by Studio")
+    row += 1
+    # Total EBITDA = sum of per-studio NOI
+    label_cell(ws, row, 2, "Total EBITDA", bold=True)
+    total_ebitda_row = row
+    # Will fill formulas after individual rows so we can SUM
+    row += 1
+    studio_ebitda_rows = {}
+    for code, name in STUDIOS:
+        label_cell(ws, row, 3, name)
+        rows_studio = studio_refs[code]["rows"]
+        noi_row = rows_studio["Net Operating Income"]
+        for i in range(36):
+            col = get_column_letter(4 + i)
+            formula_cell(ws, row, 4 + i,
+                         f"='{code} P&L'!{col}{noi_row}",
+                         fmt=CURR)
+        studio_ebitda_rows[code] = row
+        row += 1
+    # Fill in total EBITDA = sum of studio rows
+    for i in range(36):
+        col = get_column_letter(4 + i)
+        first_row = min(studio_ebitda_rows.values())
+        last_row = max(studio_ebitda_rows.values())
+        formula_cell(ws, total_ebitda_row, 4 + i,
+                     f"=SUM({col}{first_row}:{col}{last_row})",
+                     fmt=CURR, bold=True, fill=light_fill)
+    row += 1
+
+    # Annual Summary table
+    section_bar(ws, row, 2, 12, "Annual Summary")
+    row += 1
+    header_row(ws, row, 2, ["Metric", "Studio", "2026", "2027", "2028",
+                             "2027 YoY", "2028 YoY"])
+    row += 1
+    label_cell(ws, row, 2, "Total Session Sales", bold=True)
+    formula_cell(ws, row, 4, f"=SUM('Sales Forecast'!D{sf_refs['total_row']}:O{sf_refs['total_row']})",
+                 fmt=CURR, bold=True, fill=light_fill)
+    formula_cell(ws, row, 5, f"=SUM('Sales Forecast'!P{sf_refs['total_row']}:AA{sf_refs['total_row']})",
+                 fmt=CURR, bold=True, fill=light_fill)
+    formula_cell(ws, row, 6, f"=SUM('Sales Forecast'!AB{sf_refs['total_row']}:AM{sf_refs['total_row']})",
+                 fmt=CURR, bold=True, fill=light_fill)
+    formula_cell(ws, row, 7, f"=IFERROR((E{row}-D{row})/D{row},0)", fmt=PCT, bold=True)
+    formula_cell(ws, row, 8, f"=IFERROR((F{row}-E{row})/E{row},0)", fmt=PCT, bold=True)
+    row += 1
+    for code, name in STUDIOS:
+        s_row = sf_refs["studios"].get(code)
+        label_cell(ws, row, 3, name)
+        formula_cell(ws, row, 4, f"=SUM('Sales Forecast'!D{s_row}:O{s_row})", fmt=CURR)
+        formula_cell(ws, row, 5, f"=SUM('Sales Forecast'!P{s_row}:AA{s_row})", fmt=CURR)
+        formula_cell(ws, row, 6, f"=SUM('Sales Forecast'!AB{s_row}:AM{s_row})", fmt=CURR)
+        formula_cell(ws, row, 7, f"=IFERROR((E{row}-D{row})/D{row},0)", fmt=PCT)
+        formula_cell(ws, row, 8, f"=IFERROR((F{row}-E{row})/E{row},0)", fmt=PCT)
+        row += 1
+
+    row += 1
+    # EBITDA annual summary
+    label_cell(ws, row, 2, "Total EBITDA", bold=True)
+    # For 2026: cols D..O of EBITDA per-studio rows. The total EBITDA row spans cols 4..39.
+    # 2026 = D..O = cols 4..15 in total_ebitda_row
+    ws.cell(row=row, column=4,
+            value=f"=SUM(D{total_ebitda_row}:O{total_ebitda_row})").number_format = CURR
+    ws.cell(row=row, column=5,
+            value=f"=SUM(P{total_ebitda_row}:AA{total_ebitda_row})").number_format = CURR
+    ws.cell(row=row, column=6,
+            value=f"=SUM(AB{total_ebitda_row}:AM{total_ebitda_row})").number_format = CURR
+    ws.cell(row=row, column=4).font = data_bold
+    ws.cell(row=row, column=5).font = data_bold
+    ws.cell(row=row, column=6).font = data_bold
+    for c in (4, 5, 6):
+        ws.cell(row=row, column=c).fill = light_fill
+    formula_cell(ws, row, 7, f"=IFERROR((E{row}-D{row})/D{row},0)", fmt=PCT, bold=True)
+    formula_cell(ws, row, 8, f"=IFERROR((F{row}-E{row})/E{row},0)", fmt=PCT, bold=True)
+    row += 1
+    for code, name in STUDIOS:
+        s_row = studio_ebitda_rows[code]
+        label_cell(ws, row, 3, name)
+        formula_cell(ws, row, 4, f"=SUM(D{s_row}:O{s_row})", fmt=CURR)
+        formula_cell(ws, row, 5, f"=SUM(P{s_row}:AA{s_row})", fmt=CURR)
+        formula_cell(ws, row, 6, f"=SUM(AB{s_row}:AM{s_row})", fmt=CURR)
+        formula_cell(ws, row, 7, f"=IFERROR((E{row}-D{row})/D{row},0)", fmt=PCT)
+        formula_cell(ws, row, 8, f"=IFERROR((F{row}-E{row})/E{row},0)", fmt=PCT)
+        row += 1
+
+    # ----- Charts -----
+    from openpyxl.chart import BarChart, LineChart, Reference
+
+    # Revenue chart (total session sales by month)
+    chart = BarChart()
+    chart.title = "Monthly Total Session Sales"
+    chart.style = 11
+    chart.height = 8
+    chart.width = 24
+    # Total Session Sales is at row 6 (HEADER_ROW + 1)
+    data_ref = Reference(ws, min_col=4, max_col=39, min_row=HEADER_ROW + 1, max_row=HEADER_ROW + 1)
+    cats = Reference(ws, min_col=4, max_col=39, min_row=HEADER_ROW, max_row=HEADER_ROW)
+    chart.add_data(data_ref, titles_from_data=False)
+    chart.set_categories(cats)
+    ws.add_chart(chart, f"B{row + 2}")
+
+    # EBITDA chart (total EBITDA by month)
+    chart2 = LineChart()
+    chart2.title = "Monthly Total EBITDA"
+    chart2.style = 12
+    chart2.height = 8
+    chart2.width = 24
+    data_ref2 = Reference(ws, min_col=4, max_col=39, min_row=total_ebitda_row, max_row=total_ebitda_row)
+    chart2.add_data(data_ref2, titles_from_data=False)
+    chart2.set_categories(cats)
+    ws.add_chart(chart2, f"B{row + 22}")
+
+
+# ============================================================
 # MAIN
 # ============================================================
 
@@ -1055,6 +1986,28 @@ def main():
     print("  - Sales Forecast tab built")
     build_cash_flow_forecast(wb, data)
     print("  - Cash Flow Forecast tab built")
+    build_pl_consolidated(wb, data)
+    print("  - P&L tab built")
+    # Per-studio P&L tabs (must be built before All Studios + Summary which reference them)
+    for code, name in STUDIOS:
+        build_studio_pl(wb, data, code, name)
+    print(f"  - Per-studio P&L tabs built ({len(STUDIOS)} studios)")
+    build_all_studios_summary(wb, data)
+    print("  - All Studios Summary tab built")
+    build_cash_debt_equity(wb, data)
+    print("  - Cash, Debt & Equity tab built")
+    build_capex(wb, data)
+    print("  - CapEx tab built")
+    build_qbo_actuals(wb, data)
+    print("  - QBO Actuals tab built")
+    # Build last (references everything above)
+    build_summary_controls(wb, data)
+    print("  - Summary & Controls tab built")
+
+    # Reorder: Summary & Controls should be first (after Cover)
+    cover = wb["Cover"]
+    summary = wb["Summary & Controls"]
+    wb.move_sheet(summary, offset=-(len(wb.sheetnames) - 2))
 
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     wb.save(OUTPUT_PATH)
